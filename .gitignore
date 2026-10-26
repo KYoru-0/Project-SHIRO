@@ -34,9 +34,10 @@ build/
 # Local configuration file (sdk path, etc)
 local.properties
 
-# Android Studio / IntelliJ IDEA
+# Android Studio / IntelliJ IDEA / VS Code
 *.iml
 .idea/
+.vscode/
 
 # Android build outputs & caches
 captures/
