@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val appVersion = "0.1.0"
+
 android {
     namespace = "com.example.shiro"
     compileSdk {
@@ -14,7 +16,7 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = appVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -34,6 +36,10 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+base {
+    archivesName.set("shiro-$appVersion")
 }
 
 dependencies {
