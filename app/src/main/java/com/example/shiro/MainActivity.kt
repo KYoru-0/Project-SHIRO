@@ -50,6 +50,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -442,6 +443,16 @@ fun ShiroScreen() {
         }
     }
 
+    fun playTrack(index: Int) {
+        if (index in tracks.indices) {
+            currentTrackIndex = index
+            val track = tracks[index]
+            exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
+            exoPlayer.prepare()
+            exoPlayer.play()
+        }
+    }
+
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -454,12 +465,9 @@ fun ShiroScreen() {
                     playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
                 }
                 if (playbackState == Player.STATE_ENDED) {
-                    if (tracks.isNotEmpty() && currentTrackIndex < tracks.size - 1) {
-                        currentTrackIndex++
-                        val track = tracks[currentTrackIndex]
-                        exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
-                        exoPlayer.prepare()
-                        exoPlayer.play()
+                    if (tracks.isNotEmpty()) {
+                        val nextIndex = (currentTrackIndex + 1) % tracks.size
+                        playTrack(nextIndex)
                     } else {
                         isPlaying = false
                     }
@@ -478,16 +486,6 @@ fun ShiroScreen() {
             playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
             duration = exoPlayer.duration.coerceAtLeast(0L)
             delay(200L)
-        }
-    }
-
-    fun playTrack(index: Int) {
-        if (index in tracks.indices) {
-            currentTrackIndex = index
-            val track = tracks[index]
-            exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
-            exoPlayer.prepare()
-            exoPlayer.play()
         }
     }
 
@@ -694,22 +692,15 @@ fun ShiroScreen() {
                         .statusBarsPadding(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = ButtonColor,
-                        modifier = Modifier.clickable { isMenuOpen = true }
+                    IconButton(
+                        onClick = { isMenuOpen = true }
                     ) {
-                        Box(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "☰",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_menu),
+                            contentDescription = "Menu",
+                            tint = Color(0xFF0369A1),
+                            modifier = Modifier.size(28.dp)
+                        )
                     }
                 }
 
@@ -817,16 +808,23 @@ fun ShiroScreen() {
                         IconButton(
                             onClick = {
                                 if (tracks.isNotEmpty()) {
-                                    val prevIndex = if (currentTrackIndex > 0) currentTrackIndex - 1 else tracks.size - 1
-                                    playTrack(prevIndex)
+                                    val currentPos = exoPlayer.currentPosition
+                                    if (currentPos > 1000L) {
+                                        exoPlayer.seekTo(0L)
+                                        playbackPosition = 0L
+                                    } else {
+                                        val prevIndex = if (currentTrackIndex > 0) currentTrackIndex - 1 else tracks.size - 1
+                                        playTrack(prevIndex)
+                                    }
                                 }
                             },
                             enabled = tracks.isNotEmpty()
                         ) {
-                            Text(
-                                text = "⏮",
-                                fontSize = 24.sp,
-                                color = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f)
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_prev),
+                                contentDescription = "Previous Track",
+                                tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
+                                modifier = Modifier.size(24.dp)
                             )
                         }
 
@@ -846,12 +844,13 @@ fun ShiroScreen() {
                                 containerColor = if (isPlaying) Color(0xFFEF4444) else AccentColor,
                                 disabledContainerColor = AccentColor.copy(alpha = 0.4f)
                             ),
-                            modifier = Modifier.size(56.dp)
+                            modifier = Modifier.size(60.dp)
                         ) {
-                            Text(
-                                text = if (isPlaying) "⏸" else "▶",
-                                fontSize = 22.sp,
-                                color = Color.White
+                            Icon(
+                                painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(34.dp)
                             )
                         }
 
@@ -864,10 +863,11 @@ fun ShiroScreen() {
                             },
                             enabled = tracks.isNotEmpty()
                         ) {
-                            Text(
-                                text = "⏭",
-                                fontSize = 24.sp,
-                                color = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f)
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_next),
+                                contentDescription = "Next Track",
+                                tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
@@ -974,7 +974,7 @@ fun ShiroScreen() {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "Project SHIRO",
+                            text = "Project:SHIRO",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0369A1),
