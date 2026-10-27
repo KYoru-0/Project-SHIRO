@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +32,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,7 +54,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.shiro.ui.theme.ProjectSHIROTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -80,13 +85,106 @@ enum class SquishDirection {
 fun ShiroScreen() {
     var isBlinking by remember { mutableStateOf(false) }
     var squishDirection by remember { mutableStateOf(SquishDirection.CENTER) }
-    var squishDurationSec by remember { mutableStateOf(0.4f) }
+    var bpm by remember { mutableFloatStateOf(120f) }
+    var isAutoSquishing by remember { mutableStateOf(false) }
+    var isAutoSwaying by remember { mutableStateOf(false) }
+
+    val squishDurationSec = (0.3f - (bpm - 60f) * (0.2f / 120f)).coerceIn(0.1f, 0.3f)
+    val beatIntervalSec = 60f / bpm
+
     val squishProgress = remember { Animatable(0f) }
+    val swaySkew = remember { Animatable(0f) }
+    var squishJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(isAutoSquishing) {
+        if (isAutoSquishing) {
+            val directions = listOf(
+                SquishDirection.CENTER,
+                SquishDirection.LEFT,
+                SquishDirection.CENTER,
+                SquishDirection.RIGHT
+            )
+            var directionIndex = 0
+            try {
+                while (isActive) {
+                    val currentBpm = bpm
+                    val currentDurationSec = (0.3f - (currentBpm - 60f) * (0.2f / 120f)).coerceIn(0.1f, 0.3f)
+                    val totalMs = (currentDurationSec * 1000f).roundToInt().coerceAtLeast(60)
+                    val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(20)
+                    val reboundMs = (totalMs - compressMs).coerceAtLeast(20)
+
+                    val beatPeriodMs = (60000f / currentBpm).roundToInt()
+                    val restDelayMs = (beatPeriodMs - totalMs).coerceAtLeast(0)
+
+                    squishDirection = directions[directionIndex]
+
+                    squishProgress.animateTo(
+                        targetValue = 1f,
+                        animationSpec = tween(durationMillis = compressMs, easing = FastOutSlowInEasing)
+                    )
+                    squishProgress.animateTo(
+                        targetValue = 0f,
+                        animationSpec = tween(durationMillis = reboundMs, easing = FastOutSlowInEasing)
+                    )
+
+                    directionIndex = (directionIndex + 1) % directions.size
+
+                    if (restDelayMs > 0) {
+                        delay(restDelayMs.toLong())
+                    }
+                }
+            } finally {
+                squishDirection = SquishDirection.CENTER
+                squishProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(isAutoSwaying) {
+        if (isAutoSwaying) {
+            try {
+                var swayLeft = true
+                while (isActive) {
+                    val currentBpm = bpm
+                    val beatPeriodMs = (60000f / currentBpm).roundToInt().coerceAtLeast(100)
+                    val targetSkew = if (swayLeft) 0.18f else -0.18f
+
+                    swaySkew.animateTo(
+                        targetValue = targetSkew,
+                        animationSpec = tween(
+                            durationMillis = beatPeriodMs,
+                            easing = FastOutSlowInEasing
+                        )
+                    )
+
+                    swayLeft = !swayLeft
+                }
+            } finally {
+                swaySkew.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                )
+            }
+        }
+    }
+
     fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
-        squishDirection = direction
-        scope.launch {
+        squishJob?.cancel()
+        squishJob = scope.launch {
+            if (squishProgress.value > 0.01f) {
+                val quickReturnMaxMs = (squishDurationSec * 200f).roundToInt().coerceIn(40, 90)
+                val returnMs = (squishProgress.value * quickReturnMaxMs).roundToInt().coerceAtLeast(25)
+                squishProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = returnMs, easing = FastOutSlowInEasing)
+                )
+            }
+            squishDirection = direction
+
             val totalMs = (squishDurationSec * 1000f).roundToInt().coerceAtLeast(60)
             val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(30)
             val reboundMs = (totalMs - compressMs).coerceAtLeast(30)
@@ -102,29 +200,31 @@ fun ShiroScreen() {
         }
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(LightBlue)
             .navigationBarsPadding()
-            .padding(24.dp)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
             ShiroCharacter(
                 isBlinking = isBlinking,
+                isAutoSwaying = isAutoSwaying,
                 squishProgress = squishProgress.value,
                 squishDirection = squishDirection,
+                swaySkew = swaySkew.value,
                 onTap = {
-                    scope.launch {
-                        isBlinking = true
-                        delay(250)
-                        isBlinking = false
+                    if (!isAutoSquishing && !isAutoSwaying) {
+                        triggerSquish(SquishDirection.CENTER)
                     }
-                    triggerSquish(SquishDirection.CENTER)
                 },
                 eyeScale = 0.6f,
                 eyeOffsetX = 5.dp,
@@ -136,11 +236,9 @@ fun ShiroScreen() {
         }
 
         Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(0.92f),
@@ -148,23 +246,23 @@ fun ShiroScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Squish duration",
-                    fontSize = 13.sp,
+                    text = "Tempo",
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF0369A1)
                 )
                 Text(
-                    text = String.format(Locale.US, "%.2fs", squishDurationSec),
-                    fontSize = 13.sp,
+                    text = "${bpm.roundToInt()} BPM",
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF0369A1)
                 )
             }
 
             Slider(
-                value = squishDurationSec,
-                onValueChange = { squishDurationSec = it },
-                valueRange = 0.1f..1.0f,
+                value = bpm,
+                onValueChange = { bpm = it },
+                valueRange = 60f..240f,
                 colors = SliderDefaults.colors(
                     thumbColor = ButtonColor,
                     activeTrackColor = ButtonColor
@@ -174,15 +272,29 @@ fun ShiroScreen() {
                     .height(28.dp)
             )
 
+            Text(
+                text = String.format(Locale.US, "Speed: %.2fs | Beat Interval: %.2fs", squishDurationSec, beatIntervalSec),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF0284C7).copy(alpha = 0.8f)
+            )
+
             Row(
                 modifier = Modifier.fillMaxWidth(0.95f),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { triggerSquish(SquishDirection.LEFT) },
+                    onClick = {
+                        if (!isAutoSquishing) {
+                            isAutoSwaying = false
+                            isAutoSquishing = true
+                        } else {
+                            isAutoSquishing = false
+                        }
+                    },
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ButtonColor,
+                        containerColor = if (isAutoSquishing) Color(0xFFEF4444) else ButtonColor,
                         contentColor = ButtonTextColor
                     ),
                     modifier = Modifier
@@ -190,35 +302,24 @@ fun ShiroScreen() {
                         .height(48.dp)
                 ) {
                     Text(
-                        text = "◀ Left",
+                        text = if (isAutoSquishing) "Stop Squish" else "Start Squish",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 Button(
-                    onClick = { triggerSquish(SquishDirection.CENTER) },
+                    onClick = {
+                        if (!isAutoSwaying) {
+                            isAutoSquishing = false
+                            isAutoSwaying = true
+                        } else {
+                            isAutoSwaying = false
+                        }
+                    },
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ButtonColor,
-                        contentColor = ButtonTextColor
-                    ),
-                    modifier = Modifier
-                        .weight(1.1f)
-                        .height(48.dp)
-                ) {
-                    Text(
-                        text = "▼ Center",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Button(
-                    onClick = { triggerSquish(SquishDirection.RIGHT) },
-                    shape = RoundedCornerShape(20.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ButtonColor,
+                        containerColor = if (isAutoSwaying) Color(0xFFEF4444) else ButtonColor,
                         contentColor = ButtonTextColor
                     ),
                     modifier = Modifier
@@ -226,7 +327,7 @@ fun ShiroScreen() {
                         .height(48.dp)
                 ) {
                     Text(
-                        text = "Right ▶",
+                        text = if (isAutoSwaying) "Stop Sway" else "Start Sway",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -248,11 +349,11 @@ fun ShiroScreen() {
                 ),
                 modifier = Modifier
                     .fillMaxWidth(0.6f)
-                    .height(52.dp)
+                    .height(48.dp)
             ) {
                 Text(
                     text = "Blink",
-                    fontSize = 18.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -263,8 +364,10 @@ fun ShiroScreen() {
 @Composable
 fun ShiroCharacter(
     isBlinking: Boolean,
+    isAutoSwaying: Boolean = false,
     squishProgress: Float,
     squishDirection: SquishDirection,
+    swaySkew: Float = 0f,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
     eyeScale: Float = 0.6f,
@@ -272,15 +375,19 @@ fun ShiroCharacter(
     eyeOffsetY: Dp = 0.dp
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val showClosedEyes = isBlinking || isAutoSwaying || isPressed
 
     val bodyScaleY = 1f - squishProgress * 0.22f
     val bodyScaleX = 1f + squishProgress * 0.16f
 
-    val skewAmount = when (squishDirection) {
+    val squishSkewAmount = when (squishDirection) {
         SquishDirection.LEFT -> 0.32f * squishProgress
         SquishDirection.RIGHT -> -0.32f * squishProgress
         SquishDirection.CENTER -> 0f
     }
+    val totalSkewAmount = squishSkewAmount + swaySkew
 
     Box(
         modifier = modifier
@@ -301,7 +408,7 @@ fun ShiroCharacter(
                     drawIntoCanvas { canvas ->
                         canvas.save()
                         canvas.nativeCanvas.translate(pivotX, pivotY)
-                        canvas.nativeCanvas.skew(skewAmount, 0f)
+                        canvas.nativeCanvas.skew(totalSkewAmount, 0f)
                         canvas.nativeCanvas.scale(bodyScaleX, bodyScaleY)
                         canvas.nativeCanvas.translate(-pivotX, -pivotY)
 
@@ -318,13 +425,13 @@ fun ShiroCharacter(
 
             Image(
                 painter = painterResource(
-                    id = if (isBlinking) {
+                    id = if (showClosedEyes) {
                         R.drawable.shiro_eyes_closed
                     } else {
                         R.drawable.shiro_eyes_neutral
                     }
                 ),
-                contentDescription = if (isBlinking) "Shiro Eyes Closed" else "Shiro Eyes Neutral",
+                contentDescription = if (showClosedEyes) "Shiro Eyes Closed" else "Shiro Eyes Neutral",
                 modifier = Modifier
                     .fillMaxSize()
                     .offset(x = eyeOffsetX, y = eyeOffsetY)
