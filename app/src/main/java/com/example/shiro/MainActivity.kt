@@ -2,8 +2,10 @@ package com.example.shiro
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -20,7 +22,10 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -42,10 +47,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -71,21 +83,32 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,6 +120,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -107,6 +132,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -135,13 +163,15 @@ enum class DanceMode {
 }
 
 enum class Screen {
-    MAIN, CUSTOMIZE
+    MAIN, CUSTOMIZE, PLAYLIST
 }
 
 data class Track(
     val uri: Uri,
     val title: String,
     val fileName: String,
+    val artist: String = "",
+    val composer: String = ""
 )
 
 data class FolderItem(
@@ -158,12 +188,17 @@ fun savePreferences(
     bpm: Float,
     danceMode: DanceMode,
     fileName: String,
-    positionMs: Long
+    title: String,
+    positionMs: Long,
+    durationMs: Long,
+    isShuffleOn: Boolean = false,
+    isRepeatOneOn: Boolean = false,
+    sync: Boolean = false
 ) {
     val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
     val folderData = folders.joinToString("|||") { "${it.uri}||${it.name}" }
 
-    prefs.edit()
+    val editor = prefs.edit()
         .putString("folder_data", folderData)
         .putBoolean("is_hetero", isHetero)
         .putInt("left_eye_color", leftColor.toArgb())
@@ -171,34 +206,200 @@ fun savePreferences(
         .putFloat("bpm", bpm)
         .putString("dance_mode", danceMode.name)
         .putString("saved_file_name", fileName)
+        .putString("saved_title", title)
         .putLong("saved_position_ms", positionMs)
-        .apply()
+        .putLong("saved_duration_ms", durationMs)
+        .putBoolean("is_shuffle_on", isShuffleOn)
+        .putBoolean("is_repeat_one_on", isRepeatOneOn)
+
+    if (sync) {
+        editor.commit()
+    } else {
+        editor.apply()
+    }
+}
+
+fun clearSavedTrackPreferences(context: Context) {
+    val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
+    prefs.edit()
+        .putString("saved_file_name", "")
+        .putString("saved_title", "")
+        .putLong("saved_position_ms", 0L)
+        .putLong("saved_duration_ms", 0L)
+        .commit()
+}
+
+fun savePlaylistCache(context: Context, tracks: List<Track>) {
+    try {
+        val jsonArray = JSONArray()
+        for (track in tracks) {
+            val obj = JSONObject()
+            obj.put("uri", track.uri.toString())
+            obj.put("title", track.title)
+            obj.put("fileName", track.fileName)
+            obj.put("artist", track.artist)
+            obj.put("composer", track.composer)
+            jsonArray.put(obj)
+        }
+        val file = File(context.filesDir, "playlist_cache.json")
+        file.writeText(jsonArray.toString())
+    } catch (_: Exception) {}
+}
+
+fun loadPlaylistCache(context: Context): List<Track> {
+    val file = File(context.filesDir, "playlist_cache.json")
+    if (!file.exists()) return emptyList()
+    return try {
+        val content = file.readText()
+        if (content.isBlank()) return emptyList()
+        val jsonArray = JSONArray(content)
+        val list = ArrayList<Track>(jsonArray.length())
+        for (i in 0 until jsonArray.length()) {
+            val obj = jsonArray.getJSONObject(i)
+            list.add(
+                Track(
+                    uri = Uri.parse(obj.getString("uri")),
+                    title = obj.getString("title"),
+                    fileName = obj.getString("fileName"),
+                    artist = obj.optString("artist", ""),
+                    composer = obj.optString("composer", "")
+                )
+            )
+        }
+        list
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retriever: MediaMetadataRetriever): Track {
+    var title: String? = null
+    var artist = ""
+    var composer = ""
+
+    try {
+        retriever.setDataSource(context, uri)
+        title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+        val extractedArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+        val albumArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+        artist = when {
+            !extractedArtist.isNullOrBlank() -> extractedArtist.trim()
+            !albumArtist.isNullOrBlank() -> albumArtist.trim()
+            else -> ""
+        }
+        composer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER)?.trim() ?: ""
+    } catch (_: Exception) {}
+
+    val cleanTitle = if (!title.isNullOrBlank()) title.trim() else fallbackName.substringBeforeLast(".")
+
+    return Track(
+        uri = uri,
+        title = cleanTitle,
+        fileName = fallbackName,
+        artist = artist,
+        composer = composer
+    )
 }
 
 fun scanAudioFilesFromFolder(context: Context, treeUri: Uri): List<Track> {
     val audioTracks = mutableListOf<Track>()
-    val rootFile = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
+    val contentResolver = context.contentResolver
 
-    fun traverse(dir: DocumentFile) {
-        val files = dir.listFiles()
-        for (file in files) {
-            if (file.isDirectory) {
-                traverse(file)
-            } else if (file.isFile) {
-                val name = file.name ?: ""
-                val lowerName = name.lowercase()
-                val mime = file.type ?: ""
-                if (lowerName.endsWith(".mp3") || lowerName.endsWith(".wav") ||
-                    mime.startsWith("audio/mpeg") || mime.startsWith("audio/wav") || mime.startsWith("audio/x-wav")) {
-                    val title = name.substringBeforeLast(".")
-                    audioTracks.add(Track(uri = file.uri, title = title, fileName = name))
-                }
-            }
+    val rootDocId = try {
+        DocumentsContract.getTreeDocumentId(treeUri)
+    } catch (_: Exception) {
+        try {
+            DocumentsContract.getDocumentId(treeUri)
+        } catch (_: Exception) {
+            null
         }
     }
 
-    traverse(rootFile)
-    return audioTracks.sortedBy { it.fileName }
+    if (rootDocId == null) {
+        return scanAudioFilesWithDocumentFile(context, treeUri)
+    }
+
+    val dirQueue = ArrayDeque<String>().apply { add(rootDocId) }
+    val projection = arrayOf(
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE
+    )
+    val audioExts = setOf("mp3", "wav", "flac", "m4a", "ogg", "aac", "opus")
+    val retriever = MediaMetadataRetriever()
+
+    try {
+        while (dirQueue.isNotEmpty()) {
+            val currentDocId = dirQueue.removeFirst()
+            val childrenUri = try {
+                DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)
+            } catch (_: Exception) {
+                continue
+            }
+
+            try {
+                contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                    val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+
+                    if (idIdx != -1 && nameIdx != -1 && mimeIdx != -1) {
+                        while (cursor.moveToNext()) {
+                            val docId = cursor.getString(idIdx) ?: continue
+                            val name = cursor.getString(nameIdx) ?: continue
+                            val mime = cursor.getString(mimeIdx) ?: ""
+
+                            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                                dirQueue.add(docId)
+                            } else {
+                                val lower = name.lowercase()
+                                val ext = lower.substringAfterLast('.', "")
+                                if (ext in audioExts || mime.startsWith("audio/")) {
+                                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                                    audioTracks.add(extractTrackMetadata(context, docUri, name, retriever))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    } finally {
+        try { retriever.release() } catch (_: Exception) {}
+    }
+
+    return audioTracks.sortedBy { it.title.lowercase() }
+}
+
+private fun scanAudioFilesWithDocumentFile(context: Context, treeUri: Uri): List<Track> {
+    val audioTracks = mutableListOf<Track>()
+    val rootFile = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
+    val retriever = MediaMetadataRetriever()
+
+    try {
+        fun traverse(dir: DocumentFile) {
+            val files = dir.listFiles()
+            for (file in files) {
+                if (file.isDirectory) {
+                    traverse(file)
+                } else if (file.isFile) {
+                    val name = file.name ?: ""
+                    val lowerName = name.lowercase()
+                    val mime = file.type ?: ""
+                    if (lowerName.endsWith(".mp3") || lowerName.endsWith(".wav") || lowerName.endsWith(".flac") ||
+                        lowerName.endsWith(".m4a") || lowerName.endsWith(".ogg") || mime.startsWith("audio/")) {
+                        audioTracks.add(extractTrackMetadata(context, file.uri, name, retriever))
+                    }
+                }
+            }
+        }
+
+        traverse(rootFile)
+    } finally {
+        try { retriever.release() } catch (_: Exception) {}
+    }
+
+    return audioTracks.sortedBy { it.title.lowercase() }
 }
 
 fun getFileNameFromUri(context: Context, uri: Uri): String? {
@@ -219,6 +420,34 @@ fun getFileNameFromUri(context: Context, uri: Uri): String? {
         name = uri.path?.substringAfterLast('/')
     }
     return name
+}
+
+fun getDisplayPathFromUri(uri: Uri): String {
+    try {
+        val docId = try {
+            DocumentsContract.getTreeDocumentId(uri)
+        } catch (_: Exception) {
+            try {
+                DocumentsContract.getDocumentId(uri)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: uri.lastPathSegment ?: uri.path ?: uri.toString()
+
+        val decodedDocId = Uri.decode(docId)
+        if (decodedDocId.startsWith("primary:")) {
+            val relativePath = decodedDocId.substringAfter("primary:").trimStart('/')
+            return if (relativePath.isEmpty()) "/storage/emulated/0" else "/storage/emulated/0/$relativePath"
+        } else if (":" in decodedDocId) {
+            val parts = decodedDocId.split(":", limit = 2)
+            val volume = parts[0]
+            val rel = parts[1].trimStart('/')
+            return if (rel.isEmpty()) "/storage/$volume" else "/storage/$volume/$rel"
+        }
+        return Uri.decode(uri.path ?: docId)
+    } catch (_: Exception) {
+        return Uri.decode(uri.toString())
+    }
 }
 
 fun formatTime(ms: Long): String {
@@ -280,12 +509,29 @@ fun ShiroScreen() {
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
 
-    val tracks = remember { mutableStateListOf<Track>() }
+    val cachedTracks = remember { loadPlaylistCache(context) }
+    val initialPrefs = remember { context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE) }
+    val initialSavedFileName = remember { initialPrefs.getString("saved_file_name", "") ?: "" }
+    val initialSavedTitle = remember { initialPrefs.getString("saved_title", "") ?: "" }
+    val initialPositionMs = remember { initialPrefs.getLong("saved_position_ms", 0L) }
+    val initialDurationMs = remember { initialPrefs.getLong("saved_duration_ms", 0L) }
+
+    val initialIndex = remember {
+        if (cachedTracks.isNotEmpty()) {
+            val idx = cachedTracks.indexOfFirst { it.fileName == initialSavedFileName }
+            if (idx != -1) idx else 0
+        } else -1
+    }
+
+    val tracks = remember { mutableStateListOf<Track>().apply { addAll(cachedTracks) } }
     val inputFolders = remember { mutableStateListOf<FolderItem>() }
-    var currentTrackIndex by remember { mutableIntStateOf(-1) }
+    var currentTrackIndex by remember { mutableIntStateOf(initialIndex) }
     var isPlaying by remember { mutableStateOf(false) }
-    var playbackPosition by remember { mutableLongStateOf(0L) }
-    var duration by remember { mutableLongStateOf(0L) }
+    var playbackPosition by remember { mutableLongStateOf(initialPositionMs) }
+    var duration by remember { mutableLongStateOf(initialDurationMs) }
+
+    var isShuffleOn by remember { mutableStateOf(false) }
+    var isRepeatOneOn by remember { mutableStateOf(false) }
 
     var danceMode by remember { mutableStateOf(DanceMode.SWAY) }
     var bpm by remember { mutableFloatStateOf(120f) }
@@ -313,8 +559,12 @@ fun ShiroScreen() {
 
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
-            repeatMode = Player.REPEAT_MODE_OFF
+            setRepeatMode(Player.REPEAT_MODE_OFF)
         }
+    }
+
+    LaunchedEffect(isRepeatOneOn) {
+        exoPlayer.setRepeatMode(if (isRepeatOneOn) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF)
     }
 
     val permissionToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -344,6 +594,22 @@ fun ShiroScreen() {
                 exoPlayer.prepare()
                 exoPlayer.seekTo(0L)
                 playbackPosition = 0L
+                savePreferences(
+                    context = context,
+                    folders = inputFolders.toList(),
+                    isHetero = isHeterochromia,
+                    leftColor = leftEyeColor,
+                    rightColor = rightEyeColor,
+                    bpm = bpm,
+                    danceMode = danceMode,
+                    fileName = track.fileName,
+                    title = track.title,
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    isShuffleOn = isShuffleOn,
+                    isRepeatOneOn = isRepeatOneOn,
+                    sync = true
+                )
             }
         } else {
             currentTrackIndex = -1
@@ -351,6 +617,8 @@ fun ShiroScreen() {
             duration = 0L
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
+            clearSavedTrackPreferences(context)
+            savePlaylistCache(context, emptyList())
         }
         isRestored = true
     }
@@ -366,6 +634,7 @@ fun ShiroScreen() {
                     allScannedTracks.addAll(folderTracks)
                 }
                 val distinctTracks = allScannedTracks.distinctBy { it.uri }
+                savePlaylistCache(context, distinctTracks)
                 withContext(Dispatchers.Main) {
                     tracks.clear()
                     tracks.addAll(distinctTracks)
@@ -403,43 +672,105 @@ fun ShiroScreen() {
         bpm = prefs.getFloat("bpm", 120f)
         val danceModeName = prefs.getString("dance_mode", DanceMode.SWAY.name) ?: DanceMode.SWAY.name
         danceMode = try { DanceMode.valueOf(danceModeName) } catch (_: Exception) { DanceMode.SWAY }
+        isShuffleOn = prefs.getBoolean("is_shuffle_on", false)
+        isRepeatOneOn = prefs.getBoolean("is_repeat_one_on", false)
 
-        if (ContextCompat.checkSelfPermission(context, permissionToRequest) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(permissionToRequest)
-        } else if (inputFolders.isNotEmpty()) {
-            scope.launch(Dispatchers.IO) {
-                val allScannedTracks = mutableListOf<Track>()
-                for (folder in inputFolders) {
-                    val folderTracks = scanAudioFilesFromFolder(context, folder.uri)
-                    allScannedTracks.addAll(folderTracks)
-                }
-                val distinctTracks = allScannedTracks.distinctBy { it.uri }
-                withContext(Dispatchers.Main) {
-                    tracks.clear()
-                    tracks.addAll(distinctTracks)
-                    restoreTrackPosition(tracks)
-                }
-            }
+        if (inputFolders.isEmpty()) {
+            tracks.clear()
+            savePlaylistCache(context, emptyList())
+            clearSavedTrackPreferences(context)
+            restoreTrackPosition(emptyList())
         } else {
-            isRestored = true
+            if (tracks.isNotEmpty()) {
+                restoreTrackPosition(tracks)
+            }
+            if (ContextCompat.checkSelfPermission(context, permissionToRequest) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                scope.launch(Dispatchers.IO) {
+                    val allScannedTracks = mutableListOf<Track>()
+                    for (folder in inputFolders) {
+                        val folderTracks = scanAudioFilesFromFolder(context, folder.uri)
+                        allScannedTracks.addAll(folderTracks)
+                    }
+                    val distinctTracks = allScannedTracks.distinctBy { it.uri }
+                    withContext(Dispatchers.Main) {
+                        if (distinctTracks.isEmpty()) {
+                            tracks.clear()
+                            savePlaylistCache(context, emptyList())
+                            clearSavedTrackPreferences(context)
+                            restoreTrackPosition(emptyList())
+                        } else {
+                            val isSame = tracks.size == distinctTracks.size &&
+                                tracks.indices.all { i -> tracks[i].fileName == distinctTracks[i].fileName }
+                            if (!isSame) {
+                                tracks.clear()
+                                tracks.addAll(distinctTracks)
+                                savePlaylistCache(context, distinctTracks)
+                                restoreTrackPosition(tracks)
+                            }
+                        }
+                    }
+                }
+            } else {
+                permissionLauncher.launch(permissionToRequest)
+            }
         }
     }
 
-    val currentFileName = if (currentTrackIndex in tracks.indices) tracks[currentTrackIndex].fileName else ""
+    val currentTrackIndexUpdated by rememberUpdatedState(currentTrackIndex)
 
-    LaunchedEffect(isRestored, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode, currentFileName, playbackPosition) {
-        if (isRestored && currentFileName.isNotEmpty()) {
-            savePreferences(
-                context,
-                inputFolders,
-                isHeterochromia,
-                leftEyeColor,
-                rightEyeColor,
-                bpm,
-                danceMode,
-                currentFileName,
-                playbackPosition
-            )
+    fun persistCurrentSettings(
+        overridePosition: Long? = null,
+        overrideTrackIndex: Int? = null,
+        sync: Boolean = false
+    ) {
+        if (!isRestored) return
+        val idx = overrideTrackIndex ?: currentTrackIndexUpdated
+        val track = if (idx in tracks.indices) tracks[idx] else null
+        val fileName = track?.fileName ?: ""
+        val title = track?.title ?: ""
+        val pos = overridePosition ?: exoPlayer.currentPosition.coerceAtLeast(0L)
+        val dur = exoPlayer.duration.coerceAtLeast(0L)
+
+        if (fileName.isEmpty() && tracks.isNotEmpty()) return
+
+        savePreferences(
+            context = context,
+            folders = inputFolders.toList(),
+            isHetero = isHeterochromia,
+            leftColor = leftEyeColor,
+            rightColor = rightEyeColor,
+            bpm = bpm,
+            danceMode = danceMode,
+            fileName = fileName,
+            title = title,
+            positionMs = pos,
+            durationMs = if (dur > 0L) dur else duration,
+            isShuffleOn = isShuffleOn,
+            isRepeatOneOn = isRepeatOneOn,
+            sync = sync
+        )
+    }
+
+    LaunchedEffect(isRestored, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode, currentTrackIndex, isShuffleOn, isRepeatOneOn) {
+        if (isRestored && currentTrackIndex in tracks.indices) {
+            persistCurrentSettings(overrideTrackIndex = currentTrackIndex, sync = true)
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                persistCurrentSettings(
+                    overridePosition = exoPlayer.currentPosition,
+                    overrideTrackIndex = currentTrackIndexUpdated,
+                    sync = true
+                )
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -450,6 +781,7 @@ fun ShiroScreen() {
             exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
             exoPlayer.prepare()
             exoPlayer.play()
+            persistCurrentSettings(overridePosition = 0L, overrideTrackIndex = index, sync = true)
         }
     }
 
@@ -457,6 +789,11 @@ fun ShiroScreen() {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                persistCurrentSettings(
+                    overridePosition = exoPlayer.currentPosition,
+                    overrideTrackIndex = currentTrackIndexUpdated,
+                    sync = true
+                )
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -466,8 +803,18 @@ fun ShiroScreen() {
                 }
                 if (playbackState == Player.STATE_ENDED) {
                     if (tracks.isNotEmpty()) {
-                        val nextIndex = (currentTrackIndex + 1) % tracks.size
-                        playTrack(nextIndex)
+                        if (isRepeatOneOn) {
+                            playTrack(currentTrackIndex)
+                        } else if (isShuffleOn && tracks.size > 1) {
+                            var rand = (tracks.indices).random()
+                            while (rand == currentTrackIndex) {
+                                rand = (tracks.indices).random()
+                            }
+                            playTrack(rand)
+                        } else {
+                            val nextIndex = (currentTrackIndex + 1) % tracks.size
+                            playTrack(nextIndex)
+                        }
                     } else {
                         isPlaying = false
                     }
@@ -481,15 +828,34 @@ fun ShiroScreen() {
         }
     }
 
-    LaunchedEffect(isPlaying) {
+    LaunchedEffect(isPlaying, currentTrackIndex) {
+        var tickCount = 0
         while (isPlaying) {
-            playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
-            duration = exoPlayer.duration.coerceAtLeast(0L)
+            val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val curDur = exoPlayer.duration.coerceAtLeast(0L)
+            playbackPosition = curPos
+            duration = curDur
+            tickCount++
+            if (tickCount >= 5) {
+                tickCount = 0
+                persistCurrentSettings(
+                    overridePosition = curPos,
+                    overrideTrackIndex = currentTrackIndex,
+                    sync = false
+                )
+            }
             delay(200L)
         }
     }
 
     fun reloadMusicList() {
+        if (inputFolders.isEmpty()) {
+            tracks.clear()
+            savePlaylistCache(context, emptyList())
+            clearSavedTrackPreferences(context)
+            restoreTrackPosition(emptyList())
+            return
+        }
         scope.launch(Dispatchers.IO) {
             val allScannedTracks = mutableListOf<Track>()
             for (folder in inputFolders) {
@@ -497,6 +863,7 @@ fun ShiroScreen() {
                 allScannedTracks.addAll(folderTracks)
             }
             val distinctTracks = allScannedTracks.distinctBy { it.uri }
+            savePlaylistCache(context, distinctTracks)
             withContext(Dispatchers.Main) {
                 tracks.clear()
                 tracks.addAll(distinctTracks)
@@ -520,6 +887,7 @@ fun ShiroScreen() {
                 val existingUris = tracks.map { it.uri }.toSet()
                 val uniqueNewTracks = newTracks.filter { it.uri !in existingUris }
                 tracks.addAll(uniqueNewTracks)
+                savePlaylistCache(context, tracks.toList())
                 if (tracks.isNotEmpty() && currentTrackIndex < 0) {
                     restoreTrackPosition(tracks)
                 }
@@ -631,8 +999,8 @@ fun ShiroScreen() {
         squishJob?.cancel()
         squishJob = scope.launch {
             if (squishProgress.value > 0.01f) {
-                val quickReturnMaxMs = (squishDurationSec * 200f).roundToInt().coerceIn(40, 90)
-                val returnMs = (squishProgress.value * quickReturnMaxMs).roundToInt().coerceAtLeast(25)
+                val resetMaxDurationMs = (squishDurationSec * 200f).roundToInt().coerceIn(40, 90)
+                val returnMs = (squishProgress.value * resetMaxDurationMs).roundToInt().coerceAtLeast(25)
                 squishProgress.animateTo(
                     targetValue = 0f,
                     animationSpec = tween(durationMillis = returnMs, easing = FastOutSlowInEasing)
@@ -654,6 +1022,8 @@ fun ShiroScreen() {
             )
         }
     }
+
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
 
     if (currentScreen == Screen.CUSTOMIZE) {
         CustomizeScreen(
@@ -677,268 +1047,374 @@ fun ShiroScreen() {
         )
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(LightBlue)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { isMenuOpen = true }
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_menu),
-                            contentDescription = "Menu",
-                            tint = Color(0xFF0369A1),
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    ShiroCharacter(
-                        isBlinking = isBlinking,
-                        squishProgress = squishProgress.value,
-                        squishDirection = squishDirection,
-                        isAutoSwaying = isAutoSwaying,
-                        swaySkew = swaySkew.value,
-                        leftEyeColor = leftEyeColor,
-                        rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
-                        onTap = {
-                            if (!isAutoSquishing && !isAutoSwaying) {
-                                triggerSquish(SquishDirection.CENTER)
-                            }
-                        },
-                        eyeScale = 0.6f,
-                        eyeOffsetX = 5.dp,
-                        eyeOffsetY = 0.dp,
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                if (page == 0) {
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .aspectRatio(1536f / 1024f)
-                    )
-                }
-
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val hasTracks = tracks.isNotEmpty()
-                    val activeIndex = if (hasTracks) currentTrackIndex.coerceIn(0, tracks.size - 1) else -1
-
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.fillMaxWidth()
+                            .fillMaxSize()
+                            .background(LightBlue)
+                            .navigationBarsPadding()
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex].title else "No Tracks Loaded",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0369A1),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center
-                            )
-                            Text(
-                                text = if (hasTracks) "Track ${activeIndex + 1} of ${tracks.size}" else "Open menu (☰) ➔ Inputs to add music folders",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF0284C7).copy(alpha = 0.8f)
-                            )
-                        }
-                    }
-
-                    Column(modifier = Modifier.fillMaxWidth(0.95f)) {
-                        Slider(
-                            value = playbackPosition.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),
-                            onValueChange = {
-                                playbackPosition = it.toLong()
-                                exoPlayer.seekTo(it.toLong())
-                            },
-                            valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = ButtonColor,
-                                activeTrackColor = ButtonColor
-                            ),
-                            modifier = Modifier.height(24.dp)
-                        )
                         Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { isMenuOpen = true }
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_menu),
+                                    contentDescription = "Menu",
+                                    tint = Color(0xFF0369A1),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            ShiroCharacter(
+                                isBlinking = isBlinking,
+                                squishProgress = squishProgress.value,
+                                squishDirection = squishDirection,
+                                isAutoSwaying = isAutoSwaying,
+                                swaySkew = swaySkew.value,
+                                leftEyeColor = leftEyeColor,
+                                rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
+                                onTap = {
+                                    if (!isAutoSquishing && !isAutoSwaying) {
+                                        triggerSquish(SquishDirection.CENTER)
+                                    }
+                                },
+                                eyeScale = 0.6f,
+                                eyeOffsetX = 5.dp,
+                                eyeOffsetY = 0.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth(0.9f)
+                                    .aspectRatio(1536f / 1024f)
+                            )
+                        }
+
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = formatTime(playbackPosition),
-                                fontSize = 11.sp,
-                                color = Color(0xFF0369A1)
-                            )
-                            Text(
-                                text = formatTime(duration),
-                                fontSize = 11.sp,
-                                color = Color(0xFF0369A1)
-                            )
-                        }
-                    }
+                            val hasTracks = tracks.isNotEmpty()
+                            val activeIndex = if (hasTracks) currentTrackIndex.coerceIn(0, tracks.size - 1) else -1
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth(0.95f)
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = {
-                                if (tracks.isNotEmpty()) {
-                                    val currentPos = exoPlayer.currentPosition
-                                    if (currentPos > 1000L) {
-                                        exoPlayer.seekTo(0L)
-                                        playbackPosition = 0L
-                                    } else {
-                                        val prevIndex = if (currentTrackIndex > 0) currentTrackIndex - 1 else tracks.size - 1
-                                        playTrack(prevIndex)
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
+                                    Text(
+                                        text = currentTrack?.title ?: "No Tracks Loaded",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0369A1),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    if (currentTrack != null && currentTrack.artist.isNotBlank()) {
+                                        Text(
+                                            text = "Artist: ${currentTrack.artist}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color(0xFF0284C7).copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+
+                                    if (currentTrack != null && currentTrack.composer.isNotBlank()) {
+                                        Text(
+                                            text = "Composer: ${currentTrack.composer}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color(0xFF0284C7).copy(alpha = 0.65f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+
+                                    Text(
+                                        text = if (hasTracks) "Track ${activeIndex + 1} of ${tracks.size}" else "Open menu (☰) ➔ Inputs to add music folders",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFF0284C7).copy(alpha = 0.8f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+
+                            Column(modifier = Modifier.fillMaxWidth(0.95f)) {
+                                Slider(
+                                    value = playbackPosition.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),
+                                    onValueChange = {
+                                        playbackPosition = it.toLong()
+                                        exoPlayer.seekTo(it.toLong())
+                                    },
+                                    onValueChangeFinished = {
+                                        persistCurrentSettings(overridePosition = playbackPosition, sync = true)
+                                    },
+                                    valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = ButtonColor,
+                                        activeTrackColor = ButtonColor
+                                    ),
+                                    modifier = Modifier.height(24.dp)
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = formatTime(playbackPosition),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF0369A1)
+                                    )
+                                    Text(
+                                        text = formatTime(duration),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF0369A1)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth(0.95f)
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = { isShuffleOn = !isShuffleOn },
+                                    enabled = tracks.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_shuffle),
+                                        contentDescription = "Shuffle",
+                                        tint = if (tracks.isEmpty()) {
+                                            Color(0xFF0369A1).copy(alpha = 0.2f)
+                                        } else if (isShuffleOn) {
+                                            Color(0xFF0369A1)
+                                        } else {
+                                            Color(0xFF0369A1).copy(alpha = 0.4f)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        if (tracks.isNotEmpty()) {
+                                            val currentPos = exoPlayer.currentPosition
+                                            if (currentPos > 1000L) {
+                                                exoPlayer.seekTo(0L)
+                                                playbackPosition = 0L
+                                            } else {
+                                                val prevIndex = if (isShuffleOn && tracks.size > 1) {
+                                                    var rand = (tracks.indices).random()
+                                                    while (rand == currentTrackIndex) {
+                                                        rand = (tracks.indices).random()
+                                                    }
+                                                    rand
+                                                } else if (currentTrackIndex > 0) {
+                                                    currentTrackIndex - 1
+                                                } else {
+                                                    tracks.size - 1
+                                                }
+                                                playTrack(prevIndex)
+                                            }
+                                        }
+                                    },
+                                    enabled = tracks.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_prev),
+                                        contentDescription = "Previous Track",
+                                        tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        if (tracks.isNotEmpty()) {
+                                            if (isPlaying) {
+                                                exoPlayer.pause()
+                                            } else {
+                                                if (currentTrackIndex < 0) playTrack(0) else exoPlayer.play()
+                                            }
+                                        }
+                                    },
+                                    enabled = tracks.isNotEmpty(),
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AccentColor,
+                                        disabledContainerColor = AccentColor.copy(alpha = 0.4f)
+                                    ),
+                                    modifier = Modifier.size(60.dp)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
+                                        contentDescription = if (isPlaying) "Pause" else "Play",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(34.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        if (tracks.isNotEmpty()) {
+                                            val nextIndex = if (isShuffleOn && tracks.size > 1) {
+                                                var rand = (tracks.indices).random()
+                                                while (rand == currentTrackIndex) {
+                                                    rand = (tracks.indices).random()
+                                                }
+                                                rand
+                                            } else {
+                                                (currentTrackIndex + 1) % tracks.size
+                                            }
+                                            playTrack(nextIndex)
+                                        }
+                                    },
+                                    enabled = tracks.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_next),
+                                        contentDescription = "Next Track",
+                                        tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { isRepeatOneOn = !isRepeatOneOn },
+                                    enabled = tracks.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_repeat_one),
+                                        contentDescription = "Repeat One",
+                                        tint = if (tracks.isEmpty()) {
+                                            Color(0xFF0369A1).copy(alpha = 0.2f)
+                                        } else if (isRepeatOneOn) {
+                                            Color(0xFF0369A1)
+                                        } else {
+                                            Color(0xFF0369A1).copy(alpha = 0.4f)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(0.95f),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Dance:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0369A1))
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Button(
+                                        onClick = { danceMode = DanceMode.SWAY },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (danceMode == DanceMode.SWAY) AccentColor else ButtonColor.copy(alpha = 0.5f)
+                                        ),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Sway", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Button(
+                                        onClick = { danceMode = DanceMode.SQUISH },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (danceMode == DanceMode.SQUISH) AccentColor else ButtonColor.copy(alpha = 0.5f)
+                                        ),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Squish", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Button(
+                                        onClick = { danceMode = DanceMode.OFF },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (danceMode == DanceMode.OFF) AccentColor else ButtonColor.copy(alpha = 0.5f)
+                                        ),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Off", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
-                            },
-                            enabled = tracks.isNotEmpty()
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_prev),
-                                contentDescription = "Previous Track",
-                                tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
+                            }
 
-                        Button(
-                            onClick = {
-                                if (tracks.isNotEmpty()) {
-                                    if (isPlaying) {
-                                        exoPlayer.pause()
-                                    } else {
-                                        if (currentTrackIndex < 0) playTrack(0) else exoPlayer.play()
-                                    }
-                                }
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isPlaying) Color(0xFFEF4444) else AccentColor,
-                                disabledContainerColor = AccentColor.copy(alpha = 0.4f)
-                            ),
-                            modifier = Modifier.size(60.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                tint = Color.White,
-                                modifier = Modifier.size(34.dp)
-                            )
-                        }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(0.95f),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Dance Tempo: ${bpm.roundToInt()} BPM",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0369A1)
+                                )
+                            }
 
-                        IconButton(
-                            onClick = {
-                                if (tracks.isNotEmpty()) {
-                                    val nextIndex = (currentTrackIndex + 1) % tracks.size
-                                    playTrack(nextIndex)
-                                }
-                            },
-                            enabled = tracks.isNotEmpty()
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_next),
-                                contentDescription = "Next Track",
-                                tint = if (tracks.isNotEmpty()) Color(0xFF0369A1) else Color(0xFF0369A1).copy(alpha = 0.4f),
-                                modifier = Modifier.size(24.dp)
+                            Slider(
+                                value = bpm,
+                                onValueChange = { bpm = it },
+                                valueRange = 60f..240f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = ButtonColor,
+                                    activeTrackColor = ButtonColor
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth(0.95f)
+                                    .height(24.dp)
                             )
                         }
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(0.95f),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Dance:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0369A1))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Button(
-                                onClick = { danceMode = DanceMode.SWAY },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (danceMode == DanceMode.SWAY) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Sway", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = { danceMode = DanceMode.SQUISH },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (danceMode == DanceMode.SQUISH) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Squish", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = { danceMode = DanceMode.OFF },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (danceMode == DanceMode.OFF) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Off", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
+                } else {
+                    PlaylistScreen(
+                        tracks = tracks,
+                        currentTrackIndex = currentTrackIndex,
+                        onTrackSelected = { index ->
+                            playTrack(index)
+                            scope.launch { pagerState.animateScrollToPage(0) }
+                        },
+                        onBack = {
+                            scope.launch { pagerState.animateScrollToPage(0) }
                         }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(0.95f),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Dance Tempo: ${bpm.roundToInt()} BPM",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0369A1)
-                        )
-                    }
-
-                    Slider(
-                        value = bpm,
-                        onValueChange = { bpm = it },
-                        valueRange = 60f..240f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = ButtonColor,
-                            activeTrackColor = ButtonColor
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth(0.95f)
-                            .height(24.dp)
                     )
                 }
             }
@@ -980,6 +1456,28 @@ fun ShiroScreen() {
                             color = Color(0xFF0369A1),
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
+
+                        HorizontalDivider(color = Color(0xFFBAE6FD))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    isMenuOpen = false
+                                    scope.launch { pagerState.animateScrollToPage(1) }
+                                }
+                        ) {
+                            Text(
+                                text = "Playlist",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0369A1),
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
 
                         HorizontalDivider(color = Color(0xFFBAE6FD))
 
@@ -1069,20 +1567,31 @@ fun ShiroScreen() {
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text(
-                                                    text = "📁 ${folder.name}",
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = Color(0xFF0369A1),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f)
-                                                )
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "📁 ${folder.name}",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = Color(0xFF0369A1),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = getDisplayPathFromUri(folder.uri),
+                                                        fontSize = 10.sp,
+                                                        color = Color(0xFF0284C7).copy(alpha = 0.7f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
                                                 Text(
                                                     text = "❌",
                                                     fontSize = 14.sp,
                                                     modifier = Modifier
-                                                        .clickable { inputFolders.remove(folder) }
+                                                        .clickable {
+                                                            inputFolders.remove(folder)
+                                                            reloadMusicList()
+                                                        }
                                                         .padding(4.dp)
                                                 )
                                             }
@@ -1124,6 +1633,476 @@ fun ShiroScreen() {
 }
 
 @Composable
+fun Modifier.drawVerticalScrollbar(
+    state: LazyListState,
+    color: Color = Color(0xFF0369A1),
+    thickness: Dp = 14.dp,
+    paddingEnd: Dp = 6.dp,
+    touchWidth: Dp = 48.dp
+): Modifier {
+    var isDragging by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val alpha = if (isDragging) 1.0f else 0.6f
+    val currentColor = color.copy(alpha = alpha)
+
+    return this
+        .pointerInput(state) {
+            val touchWidthPx = touchWidth.toPx()
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                if (down.position.x >= size.width - touchWidthPx) {
+                    isDragging = true
+                    val pointerId = down.id
+                    var dragJob: Job? = null
+
+                    val updateScroll: (Float) -> Unit = { y ->
+                        val layoutInfo = state.layoutInfo
+                        val totalItems = layoutInfo.totalItemsCount
+                        val visibleItems = layoutInfo.visibleItemsInfo
+                        if (totalItems > 0 && visibleItems.isNotEmpty()) {
+                            val viewportHeight = size.height.toFloat()
+                            val firstVisible = visibleItems.first()
+                            val lastVisible = visibleItems.last()
+                            val visibleItemCount = (lastVisible.index - firstVisible.index + 1).coerceAtLeast(1)
+                            val estimatedTotalHeight = visibleItems.sumOf { it.size } * (totalItems.toFloat() / visibleItemCount)
+                            if (estimatedTotalHeight > viewportHeight) {
+                                val minBarHeight = 44.dp.toPx()
+                                val barHeight = (viewportHeight * (viewportHeight / estimatedTotalHeight)).coerceIn(minBarHeight, viewportHeight)
+                                val maxBarY = (viewportHeight - barHeight).coerceAtLeast(1f)
+                                val targetBarY = (y - barHeight / 2f).coerceIn(0f, maxBarY)
+                                val progress = targetBarY / maxBarY
+                                val maxScrollableUnits = (totalItems - visibleItemCount).coerceAtLeast(1)
+                                val exactPosition = progress * maxScrollableUnits
+                                val targetIndex = exactPosition.toInt().coerceIn(0, totalItems - 1)
+                                val offsetFraction = exactPosition - targetIndex
+                                val avgItemSize = visibleItems.sumOf { it.size } / visibleItems.size
+                                val targetOffset = (offsetFraction * avgItemSize).roundToInt()
+                                dragJob?.cancel()
+                                dragJob = coroutineScope.launch {
+                                    state.scrollToItem(targetIndex, targetOffset)
+                                }
+                            }
+                        }
+                    }
+
+                    updateScroll(down.position.y)
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val dragChange = event.changes.firstOrNull { it.id == pointerId } ?: break
+                        if (!dragChange.pressed) break
+                        dragChange.consume()
+                        updateScroll(dragChange.position.y)
+                    }
+                    isDragging = false
+                }
+            }
+        }
+        .drawWithContent {
+            drawContent()
+            if (!state.canScrollForward && !state.canScrollBackward) return@drawWithContent
+            val layoutInfo = state.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (totalItems == 0 || visibleItems.isEmpty()) return@drawWithContent
+
+            val firstVisible = visibleItems.first()
+            val lastVisible = visibleItems.last()
+            val visibleItemCount = (lastVisible.index - firstVisible.index + 1).coerceAtLeast(1)
+
+            val estimatedTotalHeight = visibleItems.sumOf { it.size } * (totalItems.toFloat() / visibleItemCount)
+            val viewportHeight = size.height
+            if (estimatedTotalHeight <= viewportHeight) return@drawWithContent
+
+            val minBarHeight = 44.dp.toPx()
+            val barHeight = (viewportHeight * (viewportHeight / estimatedTotalHeight)).coerceIn(minBarHeight, viewportHeight)
+
+            val firstItemOffset = (-firstVisible.offset).coerceAtLeast(0)
+            val maxScrollableItems = (totalItems - visibleItemCount).coerceAtLeast(1)
+            val progress = (firstVisible.index.toFloat() + (firstItemOffset.toFloat() / firstVisible.size.coerceAtLeast(1))) / maxScrollableItems
+            val barY = (viewportHeight - barHeight) * progress.coerceIn(0f, 1f)
+            val barX = size.width - paddingEnd.toPx() - thickness.toPx()
+
+            drawRoundRect(
+                color = currentColor,
+                topLeft = Offset(barX, barY),
+                size = Size(thickness.toPx(), barHeight),
+                cornerRadius = CornerRadius(thickness.toPx() / 2, thickness.toPx() / 2)
+            )
+        }
+}
+
+@Composable
+fun Modifier.drawVerticalScrollbar(
+    state: ScrollState,
+    color: Color = Color(0xFF0369A1),
+    thickness: Dp = 14.dp,
+    paddingEnd: Dp = 6.dp,
+    touchWidth: Dp = 48.dp
+): Modifier {
+    var isDragging by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val alpha = if (isDragging) 1.0f else 0.6f
+    val currentColor = color.copy(alpha = alpha)
+
+    return this
+        .pointerInput(state) {
+            val touchWidthPx = touchWidth.toPx()
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                if (down.position.x >= size.width - touchWidthPx) {
+                    isDragging = true
+                    val pointerId = down.id
+                    var dragJob: Job? = null
+
+                    val updateScroll: (Float) -> Unit = { y ->
+                        if (state.maxValue > 0) {
+                            val viewportHeight = size.height.toFloat()
+                            val totalHeight = state.maxValue + viewportHeight
+                            val minBarHeight = 44.dp.toPx()
+                            val barHeight = (viewportHeight * (viewportHeight / totalHeight)).coerceIn(minBarHeight, viewportHeight)
+                            val maxBarY = (viewportHeight - barHeight).coerceAtLeast(1f)
+                            val targetBarY = (y - barHeight / 2f).coerceIn(0f, maxBarY)
+                            val progress = targetBarY / maxBarY
+                            val targetScroll = (progress * state.maxValue).roundToInt().coerceIn(0, state.maxValue)
+                            dragJob?.cancel()
+                            dragJob = coroutineScope.launch {
+                                state.scrollTo(targetScroll)
+                            }
+                        }
+                    }
+
+                    updateScroll(down.position.y)
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val dragChange = event.changes.firstOrNull { it.id == pointerId } ?: break
+                        if (!dragChange.pressed) break
+                        dragChange.consume()
+                        updateScroll(dragChange.position.y)
+                    }
+                    isDragging = false
+                }
+            }
+        }
+        .drawWithContent {
+            drawContent()
+            if (!state.canScrollForward && !state.canScrollBackward) return@drawWithContent
+            if (state.maxValue <= 0) return@drawWithContent
+
+            val viewportHeight = size.height
+            val totalHeight = state.maxValue + viewportHeight
+            val minBarHeight = 44.dp.toPx()
+            val barHeight = (viewportHeight * (viewportHeight / totalHeight)).coerceIn(minBarHeight, viewportHeight)
+
+            val progress = state.value.toFloat() / state.maxValue.toFloat()
+            val barY = (viewportHeight - barHeight) * progress.coerceIn(0f, 1f)
+            val barX = size.width - paddingEnd.toPx() - thickness.toPx()
+
+            drawRoundRect(
+                color = currentColor,
+                topLeft = Offset(barX, barY),
+                size = Size(thickness.toPx(), barHeight),
+                cornerRadius = CornerRadius(thickness.toPx() / 2, thickness.toPx() / 2)
+            )
+        }
+}
+
+@Composable
+fun PlaylistScreen(
+    tracks: List<Track>,
+    currentTrackIndex: Int,
+    onTrackSelected: (Int) -> Unit,
+    onBack: () -> Unit
+) {
+    var isSearchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    val filteredTracks = remember(tracks, searchQuery) {
+        if (searchQuery.isBlank()) {
+            tracks
+        } else {
+            val query = searchQuery.trim().lowercase()
+            tracks.filter { track ->
+                track.title.lowercase().contains(query) ||
+                track.artist.lowercase().contains(query) ||
+                track.composer.lowercase().contains(query) ||
+                track.fileName.lowercase().contains(query)
+            }
+        }
+    }
+
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        } else {
+            searchQuery = ""
+            isSearchFocused = false
+        }
+    }
+
+    LaunchedEffect(isSearchFocused) {
+        if (!isSearchFocused && isSearchActive) {
+            isSearchActive = false
+        }
+    }
+
+    val showCloseIcon = isSearchFocused && searchQuery.isNotEmpty()
+    val actionIconRes = if (showCloseIcon) R.drawable.ic_close else R.drawable.ic_search
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LightBlue)
+            .navigationBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSearchActive) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = {
+                        Text(
+                            text = "Search tracks...",
+                            fontSize = 14.sp,
+                            color = Color(0xFF0369A1).copy(alpha = 0.5f)
+                        )
+                    },
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                if (showCloseIcon) {
+                                    searchQuery = ""
+                                } else {
+                                    isSearchActive = false
+                                    focusManager.clearFocus()
+                                }
+                            }
+                        ) {
+                            Icon(
+                                painter = painterResource(id = actionIconRes),
+                                contentDescription = if (showCloseIcon) "Clear Search" else "Close Search",
+                                tint = Color(0xFF0369A1),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        disabledContainerColor = Color.White,
+                        focusedBorderColor = ButtonColor,
+                        unfocusedBorderColor = Color(0xFFBAE6FD),
+                        focusedTextColor = Color(0xFF0369A1),
+                        unfocusedTextColor = Color(0xFF0369A1)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { focusState ->
+                            isSearchFocused = focusState.isFocused
+                        }
+                )
+            } else {
+                Surface(
+                    shape = CircleShape,
+                    color = ButtonColor,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable { onBack() }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_back),
+                            contentDescription = "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Playlist",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0369A1)
+                    )
+                    Text(
+                        text = "${tracks.size} tracks",
+                        fontSize = 12.sp,
+                        color = Color(0xFF0284C7).copy(alpha = 0.8f)
+                    )
+                }
+
+                IconButton(
+                    onClick = { isSearchActive = true }
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_search),
+                        contentDescription = "Search",
+                        tint = Color(0xFF0369A1),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
+        HorizontalDivider(color = Color(0xFFBAE6FD), thickness = 1.dp)
+
+        Box(modifier = Modifier.weight(1f)) {
+            if (tracks.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No tracks in playlist.\nOpen menu ➔ Inputs to add music folders.",
+                        fontSize = 14.sp,
+                        color = Color(0xFF0369A1).copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else if (filteredTracks.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No tracks found matching \"$searchQuery\"",
+                        fontSize = 14.sp,
+                        color = Color(0xFF0369A1).copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                val listState = rememberLazyListState(
+                    initialFirstVisibleItemIndex = if (currentTrackIndex in tracks.indices) {
+                        (currentTrackIndex - 2).coerceAtLeast(0)
+                    } else 0
+                )
+
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawVerticalScrollbar(listState)
+                ) {
+                    itemsIndexed(filteredTracks, key = { index, track -> "${track.uri}_$index" }) { index, track ->
+                        val originalIndex = tracks.indexOf(track)
+                        val isCurrent = originalIndex == currentTrackIndex
+                        val displayIndex = if (searchQuery.isNotBlank()) originalIndex + 1 else index + 1
+
+                        Surface(
+                            shape = RectangleShape,
+                            color = if (isCurrent) Color(0xFFBAE6FD).copy(alpha = 0.5f) else Color.Transparent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (originalIndex != -1) {
+                                        onTrackSelected(originalIndex)
+                                    }
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Text(
+                                    text = if (isCurrent) "▶" else "$displayIndex",
+                                    fontSize = 14.sp,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isCurrent) Color(0xFF0369A1) else Color(0xFF0284C7).copy(alpha = 0.6f),
+                                    modifier = Modifier.width(32.dp),
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = track.title,
+                                        fontSize = 15.sp,
+                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = Color(0xFF0369A1),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    if (track.artist.isNotBlank()) {
+                                        Text(
+                                            text = "Artist: ${track.artist}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color(0xFF0284C7).copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    if (track.composer.isNotBlank()) {
+                                        Text(
+                                            text = "Composer: ${track.composer}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color(0xFF0284C7).copy(alpha = 0.65f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(
+                            color = Color(0xFFBAE6FD).copy(alpha = 0.4f),
+                            thickness = 0.5.dp
+                        )
+                    }
+                }
+            }
+
+            if (isSearchActive && isSearchFocused) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.1f))
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                focusManager.clearFocus()
+                            }
+                        }
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun CustomizeScreen(
     onBack: () -> Unit,
     isHeterochromia: Boolean,
@@ -1140,15 +2119,18 @@ fun CustomizeScreen(
     onCharacterTap: () -> Unit
 ) {
     var isEyeColorPopupOpen by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(LightBlue)
             .navigationBarsPadding()
+            .drawVerticalScrollbar(scrollState)
+            .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1157,19 +2139,20 @@ fun CustomizeScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = CircleShape,
                 color = ButtonColor,
-                modifier = Modifier.clickable { onBack() }
+                modifier = Modifier
+                    .size(40.dp)
+                    .clickable { onBack() }
             ) {
                 Box(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "← Back",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_back),
+                        contentDescription = "Back",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -1187,8 +2170,7 @@ fun CustomizeScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(vertical = 16.dp),
+                .padding(vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
