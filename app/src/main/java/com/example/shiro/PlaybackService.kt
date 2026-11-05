@@ -18,6 +18,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionError
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
@@ -100,12 +101,12 @@ class PlaybackService : MediaSessionService() {
                     val minutes = args.getInt(SleepTimer.MINUTES, Int.MIN_VALUE)
                     if (controller.packageName != packageName || customCommand.customAction != SleepTimer.ACTION ||
                         !SleepTimer.isValid(minutes) || (minutes != SleepTimer.CANCEL && player.mediaItemCount == 0)) {
-                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
                     }
                     if (minutes == SleepTimer.EXTEND_FIVE) {
                         if (sleepDeadline == 0L || sleepDeadline <= SystemClock.elapsedRealtime()) {
                             if (sleepDeadline != 0L) finishSleep()
-                            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE))
+                            return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
                         }
                         // Extend the current deadline, including while paused; never start playback.
                         sleepDeadline += 5 * 60_000L
