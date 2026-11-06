@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -13,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -62,6 +64,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -82,8 +85,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -122,19 +125,21 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaController
 import com.example.shiro.ui.theme.ProjectSHIROTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
+import androidx.lifecycle.repeatOnLifecycle
+import kotlin.random.Random
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -186,90 +191,30 @@ fun savePreferences(
     leftColor: Color,
     rightColor: Color,
     bpm: Float,
-    danceMode: DanceMode,
-    fileName: String,
-    title: String,
-    positionMs: Long,
-    durationMs: Long,
-    isShuffleOn: Boolean = false,
-    isRepeatOneOn: Boolean = false,
-    sync: Boolean = false
+    danceMode: DanceMode
 ) {
     val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
     val folderData = folders.joinToString("|||") { "${it.uri}||${it.name}" }
 
-    val editor = prefs.edit()
+    prefs.edit()
         .putString("folder_data", folderData)
         .putBoolean("is_hetero", isHetero)
         .putInt("left_eye_color", leftColor.toArgb())
         .putInt("right_eye_color", rightColor.toArgb())
         .putFloat("bpm", bpm)
         .putString("dance_mode", danceMode.name)
-        .putString("saved_file_name", fileName)
-        .putString("saved_title", title)
-        .putLong("saved_position_ms", positionMs)
-        .putLong("saved_duration_ms", durationMs)
-        .putBoolean("is_shuffle_on", isShuffleOn)
-        .putBoolean("is_repeat_one_on", isRepeatOneOn)
-
-    if (sync) {
-        editor.commit()
-    } else {
-        editor.apply()
-    }
+        .apply()
 }
 
 fun clearSavedTrackPreferences(context: Context) {
     val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
     prefs.edit()
+        .putString("saved_track_uri", "")
         .putString("saved_file_name", "")
         .putString("saved_title", "")
         .putLong("saved_position_ms", 0L)
         .putLong("saved_duration_ms", 0L)
         .commit()
-}
-
-fun savePlaylistCache(context: Context, tracks: List<Track>) {
-    try {
-        val jsonArray = JSONArray()
-        for (track in tracks) {
-            val obj = JSONObject()
-            obj.put("uri", track.uri.toString())
-            obj.put("title", track.title)
-            obj.put("fileName", track.fileName)
-            obj.put("artist", track.artist)
-            obj.put("composer", track.composer)
-            jsonArray.put(obj)
-        }
-        val file = File(context.filesDir, "playlist_cache.json")
-        file.writeText(jsonArray.toString())
-    } catch (_: Exception) {}
-}
-
-fun loadPlaylistCache(context: Context): List<Track> {
-    val file = File(context.filesDir, "playlist_cache.json")
-    if (!file.exists()) return emptyList()
-    return try {
-        val content = file.readText()
-        if (content.isBlank()) return emptyList()
-        val jsonArray = JSONArray(content)
-        val list = ArrayList<Track>(jsonArray.length())
-        for (i in 0 until jsonArray.length()) {
-            val obj = jsonArray.getJSONObject(i)
-            list.add(
-                Track(
-                    uri = Uri.parse(obj.getString("uri")),
-                    title = obj.getString("title"),
-                    fileName = obj.getString("fileName"),
-                    artist = obj.optString("artist", ""),
-                    composer = obj.optString("composer", "")
-                )
-            )
-        }
-        list
-    } catch (_: Exception) {
-        emptyList()
-    }
 }
 
 fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retriever: MediaMetadataRetriever): Track {
@@ -299,107 +244,6 @@ fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retri
         artist = artist,
         composer = composer
     )
-}
-
-fun scanAudioFilesFromFolder(context: Context, treeUri: Uri): List<Track> {
-    val audioTracks = mutableListOf<Track>()
-    val contentResolver = context.contentResolver
-
-    val rootDocId = try {
-        DocumentsContract.getTreeDocumentId(treeUri)
-    } catch (_: Exception) {
-        try {
-            DocumentsContract.getDocumentId(treeUri)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    if (rootDocId == null) {
-        return scanAudioFilesWithDocumentFile(context, treeUri)
-    }
-
-    val dirQueue = ArrayDeque<String>().apply { add(rootDocId) }
-    val projection = arrayOf(
-        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-        DocumentsContract.Document.COLUMN_MIME_TYPE
-    )
-    val audioExts = setOf("mp3", "wav", "flac", "m4a", "ogg", "aac", "opus")
-    val retriever = MediaMetadataRetriever()
-
-    try {
-        while (dirQueue.isNotEmpty()) {
-            val currentDocId = dirQueue.removeFirst()
-            val childrenUri = try {
-                DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)
-            } catch (_: Exception) {
-                continue
-            }
-
-            try {
-                contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                    val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                    val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                    val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-
-                    if (idIdx != -1 && nameIdx != -1 && mimeIdx != -1) {
-                        while (cursor.moveToNext()) {
-                            val docId = cursor.getString(idIdx) ?: continue
-                            val name = cursor.getString(nameIdx) ?: continue
-                            val mime = cursor.getString(mimeIdx) ?: ""
-
-                            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                                dirQueue.add(docId)
-                            } else {
-                                val lower = name.lowercase()
-                                val ext = lower.substringAfterLast('.', "")
-                                if (ext in audioExts || mime.startsWith("audio/")) {
-                                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                                    audioTracks.add(extractTrackMetadata(context, docUri, name, retriever))
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-    } finally {
-        try { retriever.release() } catch (_: Exception) {}
-    }
-
-    return audioTracks.sortedBy { it.title.lowercase() }
-}
-
-private fun scanAudioFilesWithDocumentFile(context: Context, treeUri: Uri): List<Track> {
-    val audioTracks = mutableListOf<Track>()
-    val rootFile = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
-    val retriever = MediaMetadataRetriever()
-
-    try {
-        fun traverse(dir: DocumentFile) {
-            val files = dir.listFiles()
-            for (file in files) {
-                if (file.isDirectory) {
-                    traverse(file)
-                } else if (file.isFile) {
-                    val name = file.name ?: ""
-                    val lowerName = name.lowercase()
-                    val mime = file.type ?: ""
-                    if (lowerName.endsWith(".mp3") || lowerName.endsWith(".wav") || lowerName.endsWith(".flac") ||
-                        lowerName.endsWith(".m4a") || lowerName.endsWith(".ogg") || mime.startsWith("audio/")) {
-                        audioTracks.add(extractTrackMetadata(context, file.uri, name, retriever))
-                    }
-                }
-            }
-        }
-
-        traverse(rootFile)
-    } finally {
-        try { retriever.release() } catch (_: Exception) {}
-    }
-
-    return audioTracks.sortedBy { it.title.lowercase() }
 }
 
 fun getFileNameFromUri(context: Context, uri: Uri): String? {
@@ -502,23 +346,22 @@ fun ColorSpectrumBar(
     )
 }
 
+@OptIn(UnstableApi::class)
 @Composable
-fun ShiroScreen() {
+fun ShiroScreen(exoPlayer: MediaController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
 
-    val cachedTracks = remember { loadPlaylistCache(context) }
-    val initialPrefs = remember { context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE) }
-    val initialSavedFileName = remember { initialPrefs.getString("saved_file_name", "") ?: "" }
-    val initialSavedTitle = remember { initialPrefs.getString("saved_title", "") ?: "" }
-    val initialPositionMs = remember { initialPrefs.getLong("saved_position_ms", 0L) }
-    val initialDurationMs = remember { initialPrefs.getLong("saved_duration_ms", 0L) }
-
+    val cachedTracks = remember(exoPlayer) {
+        if (exoPlayer.mediaItemCount > 0) {
+            List(exoPlayer.mediaItemCount) { exoPlayer.getMediaItemAt(it).toTrack() }
+        } else loadPlaylistCache(context)
+    }
     val initialIndex = remember {
         if (cachedTracks.isNotEmpty()) {
-            val idx = cachedTracks.indexOfFirst { it.fileName == initialSavedFileName }
+            val idx = cachedTracks.indexOfFirst { it.uri.toString() == exoPlayer.currentMediaItem?.mediaId }
             if (idx != -1) idx else 0
         } else -1
     }
@@ -526,12 +369,14 @@ fun ShiroScreen() {
     val tracks = remember { mutableStateListOf<Track>().apply { addAll(cachedTracks) } }
     val inputFolders = remember { mutableStateListOf<FolderItem>() }
     var currentTrackIndex by remember { mutableIntStateOf(initialIndex) }
-    var isPlaying by remember { mutableStateOf(false) }
-    var playbackPosition by remember { mutableLongStateOf(initialPositionMs) }
-    var duration by remember { mutableLongStateOf(initialDurationMs) }
+    var isPlaying by remember { mutableStateOf(exoPlayer.isPlaying) }
+    var showPause by remember { mutableStateOf(exoPlayer.wantsPlayback()) }
+    var isBuffering by remember { mutableStateOf(exoPlayer.playbackState == Player.STATE_BUFFERING) }
+    var playbackPosition by remember { mutableLongStateOf(exoPlayer.currentPosition.coerceAtLeast(0L)) }
+    var duration by remember { mutableLongStateOf(exoPlayer.duration.coerceAtLeast(0L)) }
 
-    var isShuffleOn by remember { mutableStateOf(false) }
-    var isRepeatOneOn by remember { mutableStateOf(false) }
+    var isShuffleOn by remember { mutableStateOf(exoPlayer.shuffleModeEnabled) }
+    var isRepeatOneOn by remember { mutableStateOf(exoPlayer.repeatMode == Player.REPEAT_MODE_ONE) }
 
     var danceMode by remember { mutableStateOf(DanceMode.SWAY) }
     var bpm by remember { mutableFloatStateOf(120f) }
@@ -541,10 +386,30 @@ fun ShiroScreen() {
     var rightEyeColor by remember { mutableStateOf(Color(0xFF201C1C)) }
 
     var isBlinking by remember { mutableStateOf(false) }
+    var isSleepy by remember(exoPlayer) {
+        mutableStateOf(exoPlayer.sessionExtras.getLong(SleepTimer.DEADLINE) > 0L ||
+            exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK))
+    }
     var squishDirection by remember { mutableStateOf(SquishDirection.CENTER) }
 
     var isMenuOpen by remember { mutableStateOf(false) }
     var isInputsPopupOpen by remember { mutableStateOf(false) }
+    var favoriteIds by remember { mutableStateOf(loadFavoriteIds(context)) }
+    var unavailableIds by remember(exoPlayer) {
+        mutableStateOf(exoPlayer.sessionExtras.getStringArrayList(PlaybackRecovery.UNAVAILABLE_IDS).orEmpty().toSet())
+    }
+    var recoveryMessage by remember(exoPlayer) {
+        mutableStateOf(exoPlayer.sessionExtras.getString(PlaybackRecovery.MESSAGE).orEmpty())
+    }
+    fun toggleFavorite(track: Track) {
+        val id = track.uri.toString()
+        favoriteIds = if (id in favoriteIds) favoriteIds - id else favoriteIds + id
+        saveFavoriteIds(context, favoriteIds)
+    }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    var cacheError by remember { mutableStateOf(false) }
+    var scanJob by remember { mutableStateOf<Job?>(null) }
+    var scanGeneration by remember { mutableLongStateOf(0L) }
 
     var isRestored by remember { mutableStateOf(false) }
 
@@ -555,22 +420,83 @@ fun ShiroScreen() {
 
     val squishProgress = remember { Animatable(0f) }
     val swaySkew = remember { Animatable(0f) }
+    val shiroOffsetX = remember { Animatable(0f) }
     var squishJob by remember { mutableStateOf<Job?>(null) }
 
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setRepeatMode(Player.REPEAT_MODE_OFF)
+    fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
+        squishJob?.cancel()
+        squishJob = scope.launch {
+            if (squishProgress.value > 0.01f) {
+                squishProgress.animateTo(0f, tween(40, easing = FastOutSlowInEasing))
+            }
+            squishDirection = direction
+            squishProgress.animateTo(1f, tween(70, easing = FastOutSlowInEasing))
+            squishProgress.animateTo(0f, tween(110, easing = FastOutSlowInEasing))
         }
     }
 
-    LaunchedEffect(isRepeatOneOn) {
-        exoPlayer.setRepeatMode(if (isRepeatOneOn) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF)
+    var activeHitData by remember { mutableStateOf<TrackHitData?>(null) }
+
+    LaunchedEffect(tracks.toList()) {
+        if (tracks.isNotEmpty()) {
+            TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
+        }
     }
 
+    LaunchedEffect(currentTrackIndex, tracks.size) {
+        if (currentTrackIndex in tracks.indices) {
+            val track = tracks[currentTrackIndex]
+            if (TrackAudioAnalyzer.hasCache(context, track.fileName)) {
+                activeHitData = TrackAudioAnalyzer.loadCachedHitData(context, track.fileName)
+            } else {
+                activeHitData = null
+                val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
+                activeHitData = data
+            }
+        } else {
+            activeHitData = null
+        }
+    }
+
+    LaunchedEffect(isPlaying, activeHitData, currentTrackIndex) {
+        val hitData = activeHitData
+        if (isPlaying && hitData != null) {
+            var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val debounceMs = ((60000f / hitData.estimatedBpm) / 4f).toLong().coerceIn(50L, 250L)
+
+            var lastKickTime = -debounceMs
+            var kickIdx = hitData.kicksMs.indexOfFirst { it >= lastPos }.let { if (it == -1) hitData.kicksMs.size else it }
+
+            while (isActive && isPlaying) {
+                val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+
+                if (curPos < lastPos - 300L) {
+                    kickIdx = hitData.kicksMs.indexOfFirst { it >= curPos }.let { if (it == -1) hitData.kicksMs.size else it }
+                    lastKickTime = -debounceMs
+                }
+                lastPos = curPos
+
+                while (kickIdx < hitData.kicksMs.size && curPos >= hitData.kicksMs[kickIdx]) {
+                    val kickTime = hitData.kicksMs[kickIdx]
+                    if (kickTime - lastKickTime >= debounceMs) {
+                        lastKickTime = kickTime
+                        triggerSquish(SquishDirection.CENTER)
+                    }
+                    kickIdx++
+                }
+
+                delay(20L)
+            }
+        }
+    }
     val permissionToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
         android.Manifest.permission.READ_MEDIA_AUDIO
     } else {
         android.Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    fun persistPlaylist() {
+        cacheError = !savePlaylistCache(context, tracks.toList())
     }
 
     fun restoreTrackPosition(allScannedTracks: List<Track>) {
@@ -579,38 +505,35 @@ fun ShiroScreen() {
         val savedPositionMs = prefs.getLong("saved_position_ms", 0L)
 
         if (allScannedTracks.isNotEmpty()) {
-            val foundIndex = allScannedTracks.indexOfFirst { it.fileName == savedFileName }
-            if (foundIndex != -1) {
-                currentTrackIndex = foundIndex
-                val track = allScannedTracks[foundIndex]
-                exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
-                exoPlayer.prepare()
-                exoPlayer.seekTo(savedPositionMs)
-                playbackPosition = savedPositionMs
+            val liveId = exoPlayer.currentMediaItem?.mediaId
+            val liveIndex = allScannedTracks.indexOfFirst { it.uri.toString() == liveId }
+            val savedUri = prefs.getString("saved_track_uri", "")
+            val savedIndex = if (!savedUri.isNullOrBlank()) {
+                allScannedTracks.indexOfFirst { it.uri.toString() == savedUri }.takeIf { it >= 0 }
             } else {
-                currentTrackIndex = 0
-                val track = allScannedTracks[0]
-                exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
-                exoPlayer.prepare()
-                exoPlayer.seekTo(0L)
-                playbackPosition = 0L
-                savePreferences(
-                    context = context,
-                    folders = inputFolders.toList(),
-                    isHetero = isHeterochromia,
-                    leftColor = leftEyeColor,
-                    rightColor = rightEyeColor,
-                    bpm = bpm,
-                    danceMode = danceMode,
-                    fileName = track.fileName,
-                    title = track.title,
-                    positionMs = 0L,
-                    durationMs = 0L,
-                    isShuffleOn = isShuffleOn,
-                    isRepeatOneOn = isRepeatOneOn,
-                    sync = true
-                )
+                // Filename matching is only for legacy saves, never for a removed URI.
+                allScannedTracks.indexOfFirst { it.fileName == savedFileName }.takeIf { it >= 0 }
             }
+            val index = liveIndex.takeIf { it >= 0 } ?: savedIndex ?: 0
+            val position = if (liveIndex >= 0) exoPlayer.currentPosition else if (savedIndex != null) savedPositionMs else 0L
+            val sameQueue = exoPlayer.mediaItemCount == allScannedTracks.size && allScannedTracks.indices.all {
+                exoPlayer.getMediaItemAt(it).mediaId == allScannedTracks[it].uri.toString()
+            }
+            if (!sameQueue) {
+                // Keep the live track and position when folders are added or rescanned.
+                if (liveIndex < 0) exoPlayer.pause()
+                exoPlayer.setMediaItems(allScannedTracks.map { it.toMediaItem() }, index, position.coerceAtLeast(0L))
+                exoPlayer.prepare()
+            } else {
+                // Refresh notification metadata without resetting the song or shuffle order.
+                allScannedTracks.forEachIndexed { itemIndex, track ->
+                    if (exoPlayer.getMediaItemAt(itemIndex).toTrack() != track) {
+                        exoPlayer.replaceMediaItem(itemIndex, track.toMediaItem())
+                    }
+                }
+            }
+            currentTrackIndex = index
+            playbackPosition = position.coerceAtLeast(0L)
         } else {
             currentTrackIndex = -1
             playbackPosition = 0L
@@ -618,30 +541,65 @@ fun ShiroScreen() {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             clearSavedTrackPreferences(context)
-            savePlaylistCache(context, emptyList())
         }
         isRestored = true
+    }
+
+    // Every entry point uses a folder snapshot and the same generation guard.
+    // Scan failures preserve retained tracks; explicit folder removals take effect immediately.
+    fun reloadMusicList() {
+        val generation = ++scanGeneration
+        scanJob?.cancel()
+        scanError = null
+        val folders = inputFolders.toList()
+        if (folders.isEmpty()) {
+            tracks.clear()
+            restoreTrackPosition(emptyList())
+            persistPlaylist()
+            return
+        }
+        val retainedTracks = tracks.filter { track -> folders.any { track.belongsToFolder(it.uri) } }
+        if (retainedTracks.size != tracks.size) {
+            tracks.clear()
+            tracks.addAll(retainedTracks)
+            restoreTrackPosition(tracks)
+            persistPlaylist()
+        }
+        scanJob = scope.launch {
+            var scanningFolder = ""
+            val scannedTracks = try {
+                withContext(Dispatchers.IO) {
+                    val result = mutableListOf<Track>()
+                    for (folder in folders) {
+                        scanningFolder = folder.name
+                        result.addAll(scanAudioFilesFromFolder(context, folder.uri))
+                    }
+                    result.distinctBy { it.uri }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (generation == scanGeneration && folders == inputFolders.toList()) {
+                    scanError = "Couldn't read $scanningFolder. Existing tracks from selected folders have been kept. " +
+                        "Reconnect the storage or reselect the folder in Inputs, then retry."
+                }
+                return@launch
+            }
+            if (generation != scanGeneration || folders != inputFolders.toList()) return@launch
+            // No suspension between checking the generation and committing the result.
+            tracks.clear()
+            tracks.addAll(scannedTracks)
+            restoreTrackPosition(tracks)
+            persistPlaylist()
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted && inputFolders.isNotEmpty()) {
-            scope.launch(Dispatchers.IO) {
-                val allScannedTracks = mutableListOf<Track>()
-                for (folder in inputFolders) {
-                    val folderTracks = scanAudioFilesFromFolder(context, folder.uri)
-                    allScannedTracks.addAll(folderTracks)
-                }
-                val distinctTracks = allScannedTracks.distinctBy { it.uri }
-                savePlaylistCache(context, distinctTracks)
-                withContext(Dispatchers.Main) {
-                    tracks.clear()
-                    tracks.addAll(distinctTracks)
-                    restoreTrackPosition(tracks)
-                }
-            }
-        }
+        if (isGranted) reloadMusicList()
+        else scanError = "Music access wasn't granted. Your previous playlist is unchanged. " +
+            "Reselect a folder in Inputs or retry."
     }
 
     LaunchedEffect(Unit) {
@@ -672,202 +630,88 @@ fun ShiroScreen() {
         bpm = prefs.getFloat("bpm", 120f)
         val danceModeName = prefs.getString("dance_mode", DanceMode.SWAY.name) ?: DanceMode.SWAY.name
         danceMode = try { DanceMode.valueOf(danceModeName) } catch (_: Exception) { DanceMode.SWAY }
-        isShuffleOn = prefs.getBoolean("is_shuffle_on", false)
-        isRepeatOneOn = prefs.getBoolean("is_repeat_one_on", false)
+        isShuffleOn = exoPlayer.shuffleModeEnabled
+        isRepeatOneOn = exoPlayer.repeatMode == Player.REPEAT_MODE_ONE
+        isRestored = true
 
         if (inputFolders.isEmpty()) {
-            tracks.clear()
-            savePlaylistCache(context, emptyList())
-            clearSavedTrackPreferences(context)
-            restoreTrackPosition(emptyList())
+            reloadMusicList()
         } else {
-            if (tracks.isNotEmpty()) {
-                restoreTrackPosition(tracks)
-            }
+            if (tracks.isNotEmpty()) restoreTrackPosition(tracks)
             if (ContextCompat.checkSelfPermission(context, permissionToRequest) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                scope.launch(Dispatchers.IO) {
-                    val allScannedTracks = mutableListOf<Track>()
-                    for (folder in inputFolders) {
-                        val folderTracks = scanAudioFilesFromFolder(context, folder.uri)
-                        allScannedTracks.addAll(folderTracks)
-                    }
-                    val distinctTracks = allScannedTracks.distinctBy { it.uri }
-                    withContext(Dispatchers.Main) {
-                        if (distinctTracks.isEmpty()) {
-                            tracks.clear()
-                            savePlaylistCache(context, emptyList())
-                            clearSavedTrackPreferences(context)
-                            restoreTrackPosition(emptyList())
-                        } else {
-                            val isSame = tracks.size == distinctTracks.size &&
-                                tracks.indices.all { i -> tracks[i].fileName == distinctTracks[i].fileName }
-                            if (!isSame) {
-                                tracks.clear()
-                                tracks.addAll(distinctTracks)
-                                savePlaylistCache(context, distinctTracks)
-                                restoreTrackPosition(tracks)
-                            }
-                        }
-                    }
-                }
+                reloadMusicList()
             } else {
                 permissionLauncher.launch(permissionToRequest)
             }
         }
     }
 
-    val currentTrackIndexUpdated by rememberUpdatedState(currentTrackIndex)
-
-    fun persistCurrentSettings(
-        overridePosition: Long? = null,
-        overrideTrackIndex: Int? = null,
-        sync: Boolean = false
-    ) {
-        if (!isRestored) return
-        val idx = overrideTrackIndex ?: currentTrackIndexUpdated
-        val track = if (idx in tracks.indices) tracks[idx] else null
-        val fileName = track?.fileName ?: ""
-        val title = track?.title ?: ""
-        val pos = overridePosition ?: exoPlayer.currentPosition.coerceAtLeast(0L)
-        val dur = exoPlayer.duration.coerceAtLeast(0L)
-
-        if (fileName.isEmpty() && tracks.isNotEmpty()) return
-
-        savePreferences(
-            context = context,
-            folders = inputFolders.toList(),
-            isHetero = isHeterochromia,
-            leftColor = leftEyeColor,
-            rightColor = rightEyeColor,
-            bpm = bpm,
-            danceMode = danceMode,
-            fileName = fileName,
-            title = title,
-            positionMs = pos,
-            durationMs = if (dur > 0L) dur else duration,
-            isShuffleOn = isShuffleOn,
-            isRepeatOneOn = isRepeatOneOn,
-            sync = sync
-        )
-    }
-
-    LaunchedEffect(isRestored, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode, currentTrackIndex, isShuffleOn, isRepeatOneOn) {
-        if (isRestored && currentTrackIndex in tracks.indices) {
-            persistCurrentSettings(overrideTrackIndex = currentTrackIndex, sync = true)
+    // The service alone persists playback; the screen only saves appearance and input folders.
+    LaunchedEffect(isRestored, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode) {
+        if (isRestored) {
+            savePreferences(context, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode)
         }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
-                persistCurrentSettings(
-                    overridePosition = exoPlayer.currentPosition,
-                    overrideTrackIndex = currentTrackIndexUpdated,
-                    sync = true
-                )
+    LaunchedEffect(lifecycleOwner, isPlaying) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (!isPlaying) {
+                try {
+                    while (isActive) {
+                        delay(Random.nextLong(3_000L, 7_001L))
+                        isBlinking = true
+                        delay(130L)
+                        isBlinking = false
+                    }
+                } finally {
+                    isBlinking = false
+                }
             }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
     fun playTrack(index: Int) {
         if (index in tracks.indices) {
-            currentTrackIndex = index
-            val track = tracks[index]
-            exoPlayer.setMediaItem(MediaItem.fromUri(track.uri))
+            restoreTrackPosition(tracks)
+            exoPlayer.seekToDefaultPosition(index)
             exoPlayer.prepare()
             exoPlayer.play()
-            persistCurrentSettings(overridePosition = 0L, overrideTrackIndex = index, sync = true)
         }
     }
 
     DisposableEffect(exoPlayer) {
+        fun updateFromPlayer() {
+            currentTrackIndex = tracks.indexOfFirst { it.uri.toString() == exoPlayer.currentMediaItem?.mediaId }
+            isPlaying = exoPlayer.isPlaying
+            showPause = exoPlayer.wantsPlayback()
+            isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING
+            isShuffleOn = exoPlayer.shuffleModeEnabled
+            isRepeatOneOn = exoPlayer.repeatMode == Player.REPEAT_MODE_ONE
+            playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            duration = exoPlayer.duration.coerceAtLeast(0L)
+        }
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-                persistCurrentSettings(
-                    overridePosition = exoPlayer.currentPosition,
-                    overrideTrackIndex = currentTrackIndexUpdated,
-                    sync = true
-                )
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) {
-                    duration = exoPlayer.duration.coerceAtLeast(0L)
-                    playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
-                }
-                if (playbackState == Player.STATE_ENDED) {
-                    if (tracks.isNotEmpty()) {
-                        if (isRepeatOneOn) {
-                            playTrack(currentTrackIndex)
-                        } else if (isShuffleOn && tracks.size > 1) {
-                            var rand = (tracks.indices).random()
-                            while (rand == currentTrackIndex) {
-                                rand = (tracks.indices).random()
-                            }
-                            playTrack(rand)
-                        } else {
-                            val nextIndex = (currentTrackIndex + 1) % tracks.size
-                            playTrack(nextIndex)
-                        }
-                    } else {
-                        isPlaying = false
-                    }
-                }
+            override fun onEvents(player: Player, events: Player.Events) {
+                updateFromPlayer()
             }
         }
         exoPlayer.addListener(listener)
-        onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
-        }
+        updateFromPlayer()
+        onDispose { exoPlayer.removeListener(listener) }
     }
 
-    LaunchedEffect(isPlaying, currentTrackIndex) {
-        var tickCount = 0
-        while (isPlaying) {
-            val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-            val curDur = exoPlayer.duration.coerceAtLeast(0L)
-            playbackPosition = curPos
-            duration = curDur
-            tickCount++
-            if (tickCount >= 5) {
-                tickCount = 0
-                persistCurrentSettings(
-                    overridePosition = curPos,
-                    overrideTrackIndex = currentTrackIndex,
-                    sync = false
-                )
-            }
-            delay(200L)
-        }
-    }
-
-    fun reloadMusicList() {
-        if (inputFolders.isEmpty()) {
-            tracks.clear()
-            savePlaylistCache(context, emptyList())
-            clearSavedTrackPreferences(context)
-            restoreTrackPosition(emptyList())
-            return
-        }
-        scope.launch(Dispatchers.IO) {
-            val allScannedTracks = mutableListOf<Track>()
-            for (folder in inputFolders) {
-                val folderTracks = scanAudioFilesFromFolder(context, folder.uri)
-                allScannedTracks.addAll(folderTracks)
-            }
-            val distinctTracks = allScannedTracks.distinctBy { it.uri }
-            savePlaylistCache(context, distinctTracks)
-            withContext(Dispatchers.Main) {
-                tracks.clear()
-                tracks.addAll(distinctTracks)
-                restoreTrackPosition(tracks)
+    LaunchedEffect(lifecycleOwner, exoPlayer) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                playbackPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+                duration = exoPlayer.duration.coerceAtLeast(0L)
+                showPause = exoPlayer.wantsPlayback()
+                unavailableIds = exoPlayer.sessionExtras.getStringArrayList(PlaybackRecovery.UNAVAILABLE_IDS).orEmpty().toSet()
+                recoveryMessage = exoPlayer.sessionExtras.getString(PlaybackRecovery.MESSAGE).orEmpty()
+                isSleepy = exoPlayer.sessionExtras.getLong(SleepTimer.DEADLINE) > 0L ||
+                    exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK)
+                delay(250L)
             }
         }
     }
@@ -881,18 +725,7 @@ fun ShiroScreen() {
             inputFolders.add(FolderItem(uri = uri, name = folderName))
         }
 
-        scope.launch(Dispatchers.IO) {
-            val newTracks = scanAudioFilesFromFolder(context, uri)
-            withContext(Dispatchers.Main) {
-                val existingUris = tracks.map { it.uri }.toSet()
-                val uniqueNewTracks = newTracks.filter { it.uri !in existingUris }
-                tracks.addAll(uniqueNewTracks)
-                savePlaylistCache(context, tracks.toList())
-                if (tracks.isNotEmpty() && currentTrackIndex < 0) {
-                    restoreTrackPosition(tracks)
-                }
-            }
-        }
+        reloadMusicList()
     }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -909,119 +742,9 @@ fun ShiroScreen() {
         }
     }
 
-    LaunchedEffect(isAutoSquishing) {
-        if (isAutoSquishing) {
-            val directions = listOf(
-                SquishDirection.CENTER,
-                SquishDirection.LEFT,
-                SquishDirection.CENTER,
-                SquishDirection.RIGHT
-            )
-            var directionIndex = 0
-            try {
-                while (isActive) {
-                    val currentBpm = bpm
-                    val currentDurationSec = (0.3f - (currentBpm - 60f) * (0.2f / 120f)).coerceIn(0.1f, 0.3f)
-                    val totalMs = (currentDurationSec * 1000f).roundToInt().coerceAtLeast(60)
-                    val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(20)
-                    val reboundMs = (totalMs - compressMs).coerceAtLeast(20)
 
-                    val beatPeriodMs = (60000f / currentBpm).roundToInt()
-                    val restDelayMs = (beatPeriodMs - totalMs).coerceAtLeast(0)
 
-                    squishDirection = directions[directionIndex]
 
-                    squishProgress.animateTo(
-                        targetValue = 1f,
-                        animationSpec = tween(durationMillis = compressMs, easing = FastOutSlowInEasing)
-                    )
-                    squishProgress.animateTo(
-                        targetValue = 0f,
-                        animationSpec = tween(durationMillis = reboundMs, easing = FastOutSlowInEasing)
-                    )
-
-                    directionIndex = (directionIndex + 1) % directions.size
-
-                    if (restDelayMs > 0) {
-                        delay(restDelayMs.toLong())
-                    }
-                }
-            } finally {
-                squishDirection = SquishDirection.CENTER
-                squishProgress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing)
-                )
-            }
-        } else {
-            squishDirection = SquishDirection.CENTER
-            squishProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing)
-            )
-        }
-    }
-
-    LaunchedEffect(isAutoSwaying) {
-        if (isAutoSwaying) {
-            try {
-                var swayLeft = true
-                while (isActive) {
-                    val currentBpm = bpm
-                    val beatPeriodMs = (60000f / currentBpm).roundToInt().coerceAtLeast(100)
-                    val targetSkew = if (swayLeft) 0.18f else -0.18f
-
-                    swaySkew.animateTo(
-                        targetValue = targetSkew,
-                        animationSpec = tween(
-                            durationMillis = beatPeriodMs,
-                            easing = FastOutSlowInEasing
-                        )
-                    )
-
-                    swayLeft = !swayLeft
-                }
-            } finally {
-                swaySkew.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
-                )
-            }
-        } else {
-            swaySkew.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
-            )
-        }
-    }
-
-    fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
-        squishJob?.cancel()
-        squishJob = scope.launch {
-            if (squishProgress.value > 0.01f) {
-                val resetMaxDurationMs = (squishDurationSec * 200f).roundToInt().coerceIn(40, 90)
-                val returnMs = (squishProgress.value * resetMaxDurationMs).roundToInt().coerceAtLeast(25)
-                squishProgress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = returnMs, easing = FastOutSlowInEasing)
-                )
-            }
-            squishDirection = direction
-
-            val totalMs = (squishDurationSec * 1000f).roundToInt().coerceAtLeast(60)
-            val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(30)
-            val reboundMs = (totalMs - compressMs).coerceAtLeast(30)
-
-            squishProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = compressMs, easing = FastOutSlowInEasing)
-            )
-            squishProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = reboundMs, easing = FastOutSlowInEasing)
-            )
-        }
-    }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
 
@@ -1035,14 +758,13 @@ fun ShiroScreen() {
             rightEyeColor = rightEyeColor,
             onRightEyeColorChange = { rightEyeColor = it },
             isBlinking = isBlinking,
+            isSleepy = isSleepy,
             squishProgress = squishProgress.value,
             squishDirection = squishDirection,
             isAutoSwaying = isAutoSwaying,
-            swaySkew = swaySkew.value,
+            swaySkew = 0f,
             onCharacterTap = {
-                if (!isAutoSquishing && !isAutoSwaying) {
-                    triggerSquish(SquishDirection.CENTER)
-                }
+                triggerSquish(SquishDirection.CENTER)
             }
         )
     } else {
@@ -1077,6 +799,8 @@ fun ShiroScreen() {
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
+                            Spacer(Modifier.weight(1f))
+                            SleepTimerControl(exoPlayer)
                         }
 
                         Box(
@@ -1087,6 +811,7 @@ fun ShiroScreen() {
                         ) {
                             ShiroCharacter(
                                 isBlinking = isBlinking,
+                                isSleepy = isSleepy,
                                 squishProgress = squishProgress.value,
                                 squishDirection = squishDirection,
                                 isAutoSwaying = isAutoSwaying,
@@ -1102,8 +827,9 @@ fun ShiroScreen() {
                                 eyeOffsetX = 5.dp,
                                 eyeOffsetY = 0.dp,
                                 modifier = Modifier
-                                    .fillMaxWidth(0.9f)
+                                    .fillMaxWidth(0.85f)
                                     .aspectRatio(1536f / 1024f)
+                                    .offset(x = shiroOffsetX.value.dp)
                             )
                         }
 
@@ -1126,15 +852,26 @@ fun ShiroScreen() {
                                     verticalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
                                     val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
-                                    Text(
-                                        text = currentTrack?.title ?: "No Tracks Loaded",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF0369A1),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center
-                                    )
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        if (currentTrack != null) {
+                                            Spacer(modifier = Modifier.size(40.dp))
+                                        }
+                                        Text(
+                                            text = currentTrack?.title ?: "No Tracks Loaded",
+                                            modifier = Modifier.weight(1f),
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF0369A1),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        if (currentTrack != null) {
+                                            FavoriteButton(currentTrack.uri.toString() in favoriteIds, currentTrack.title) {
+                                                toggleFavorite(currentTrack)
+                                            }
+                                        }
+                                    }
 
                                     if (currentTrack != null && currentTrack.artist.isNotBlank()) {
                                         Text(
@@ -1161,7 +898,11 @@ fun ShiroScreen() {
                                     }
 
                                     Text(
-                                        text = if (hasTracks) "Track ${activeIndex + 1} of ${tracks.size}" else "Open menu (☰) ➔ Inputs to add music folders",
+                                        text = when {
+                                            isBuffering && showPause -> "Loading…"
+                                            hasTracks -> "Track ${activeIndex + 1} of ${tracks.size}"
+                                            else -> "Open menu (☰) ➔ Inputs to add music folders"
+                                        },
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = Color(0xFF0284C7).copy(alpha = 0.8f),
@@ -1172,15 +913,16 @@ fun ShiroScreen() {
                                 }
                             }
 
+                            if (recoveryMessage.isNotBlank()) {
+                                Text(recoveryMessage, color = AccentColor, fontSize = 12.sp,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                            }
                             Column(modifier = Modifier.fillMaxWidth(0.95f)) {
                                 Slider(
                                     value = playbackPosition.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),
                                     onValueChange = {
                                         playbackPosition = it.toLong()
                                         exoPlayer.seekTo(it.toLong())
-                                    },
-                                    onValueChangeFinished = {
-                                        persistCurrentSettings(overridePosition = playbackPosition, sync = true)
                                     },
                                     valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
                                     colors = SliderDefaults.colors(
@@ -1214,7 +956,7 @@ fun ShiroScreen() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 IconButton(
-                                    onClick = { isShuffleOn = !isShuffleOn },
+                                    onClick = { exoPlayer.shuffleModeEnabled = !exoPlayer.shuffleModeEnabled },
                                     enabled = tracks.isNotEmpty()
                                 ) {
                                     Icon(
@@ -1239,18 +981,9 @@ fun ShiroScreen() {
                                                 exoPlayer.seekTo(0L)
                                                 playbackPosition = 0L
                                             } else {
-                                                val prevIndex = if (isShuffleOn && tracks.size > 1) {
-                                                    var rand = (tracks.indices).random()
-                                                    while (rand == currentTrackIndex) {
-                                                        rand = (tracks.indices).random()
-                                                    }
-                                                    rand
-                                                } else if (currentTrackIndex > 0) {
-                                                    currentTrackIndex - 1
-                                                } else {
-                                                    tracks.size - 1
-                                                }
-                                                playTrack(prevIndex)
+                                                exoPlayer.seekToPreviousMediaItem()
+                                                exoPlayer.prepare()
+                                                exoPlayer.play()
                                             }
                                         }
                                     },
@@ -1267,10 +1000,13 @@ fun ShiroScreen() {
                                 Button(
                                     onClick = {
                                         if (tracks.isNotEmpty()) {
-                                            if (isPlaying) {
+                                            if (exoPlayer.wantsPlayback()) {
                                                 exoPlayer.pause()
                                             } else {
-                                                if (currentTrackIndex < 0) playTrack(0) else exoPlayer.play()
+                                                if (currentTrackIndex < 0) playTrack(0) else {
+                                                    exoPlayer.prepare()
+                                                    exoPlayer.play()
+                                                }
                                             }
                                         }
                                     },
@@ -1283,8 +1019,8 @@ fun ShiroScreen() {
                                     modifier = Modifier.size(60.dp)
                                 ) {
                                     Icon(
-                                        painter = painterResource(id = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
-                                        contentDescription = if (isPlaying) "Pause" else "Play",
+                                        painter = painterResource(id = if (showPause) R.drawable.ic_pause else R.drawable.ic_play),
+                                        contentDescription = if (showPause) "Pause" else "Play",
                                         tint = Color.White,
                                         modifier = Modifier.size(34.dp)
                                     )
@@ -1293,16 +1029,9 @@ fun ShiroScreen() {
                                 IconButton(
                                     onClick = {
                                         if (tracks.isNotEmpty()) {
-                                            val nextIndex = if (isShuffleOn && tracks.size > 1) {
-                                                var rand = (tracks.indices).random()
-                                                while (rand == currentTrackIndex) {
-                                                    rand = (tracks.indices).random()
-                                                }
-                                                rand
-                                            } else {
-                                                (currentTrackIndex + 1) % tracks.size
-                                            }
-                                            playTrack(nextIndex)
+                                            exoPlayer.seekToNextMediaItem()
+                                            exoPlayer.prepare()
+                                            exoPlayer.play()
                                         }
                                     },
                                     enabled = tracks.isNotEmpty()
@@ -1316,7 +1045,11 @@ fun ShiroScreen() {
                                 }
 
                                 IconButton(
-                                    onClick = { isRepeatOneOn = !isRepeatOneOn },
+                                    onClick = {
+                                        exoPlayer.repeatMode = if (exoPlayer.repeatMode == Player.REPEAT_MODE_ONE) {
+                                            Player.REPEAT_MODE_ALL
+                                        } else Player.REPEAT_MODE_ONE
+                                    },
                                     enabled = tracks.isNotEmpty()
                                 ) {
                                     Icon(
@@ -1333,80 +1066,14 @@ fun ShiroScreen() {
                                     )
                                 }
                             }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(0.95f),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Dance:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0369A1))
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Button(
-                                        onClick = { danceMode = DanceMode.SWAY },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.SWAY) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Sway", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    Button(
-                                        onClick = { danceMode = DanceMode.SQUISH },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.SQUISH) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Squish", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    Button(
-                                        onClick = { danceMode = DanceMode.OFF },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.OFF) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Off", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(0.95f),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Dance Tempo: ${bpm.roundToInt()} BPM",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0369A1)
-                                )
-                            }
-
-                            Slider(
-                                value = bpm,
-                                onValueChange = { bpm = it },
-                                valueRange = 60f..240f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = ButtonColor,
-                                    activeTrackColor = ButtonColor
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth(0.95f)
-                                    .height(24.dp)
-                            )
                         }
                     }
                 } else {
                     PlaylistScreen(
                         tracks = tracks,
+                        favoriteIds = favoriteIds,
+                        unavailableIds = unavailableIds,
+                        onToggleFavorite = { toggleFavorite(it) },
                         currentTrackIndex = currentTrackIndex,
                         onTrackSelected = { index ->
                             playTrack(index)
@@ -1520,6 +1187,38 @@ fun ShiroScreen() {
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
+
+                        HorizontalDivider(color = Color(0xFFBAE6FD))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    isMenuOpen = false
+                                    TrackAudioAnalyzer.clearAllCache(context)
+                                    activeHitData = null
+                                    Toast.makeText(context, "Map cache deleted. Re-analyzing playlist...", Toast.LENGTH_SHORT).show()
+                                    TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
+                                    if (currentTrackIndex in tracks.indices) {
+                                        val track = tracks[currentTrackIndex]
+                                        scope.launch {
+                                            val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
+                                            activeHitData = data
+                                        }
+                                    }
+                                }
+                        ) {
+                            Text(
+                                text = "Delete Map Cache",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFEF4444),
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1590,6 +1289,8 @@ fun ShiroScreen() {
                                                     modifier = Modifier
                                                         .clickable {
                                                             inputFolders.remove(folder)
+                                                            // Persist selection before caching removal; failed cache saves must not resurrect it.
+                                                            savePreferences(context, inputFolders.toList(), isHeterochromia, leftEyeColor, rightEyeColor, bpm, danceMode)
                                                             reloadMusicList()
                                                         }
                                                         .padding(4.dp)
@@ -1629,6 +1330,25 @@ fun ShiroScreen() {
                 )
             }
         }
+    }
+    if (cacheError) {
+        AlertDialog(
+            onDismissRequest = { cacheError = false },
+            title = { Text("Couldn't save the playlist") },
+            text = { Text("Your current playlist still works, but its latest changes may not be restored after closing Shiro. Free some device storage, then retry.") },
+            confirmButton = { TextButton(onClick = { persistPlaylist() }) { Text("Retry save") } },
+            dismissButton = { TextButton(onClick = { cacheError = false }) { Text("Close") } }
+        )
+    }
+    // Compose after Inputs so a failed scan's retry dialog is visible above it.
+    scanError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { scanError = null },
+            title = { Text("Couldn't refresh music") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { reloadMusicList() }) { Text("Retry") } },
+            dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
+        )
     }
 }
 
@@ -1811,27 +1531,28 @@ fun Modifier.drawVerticalScrollbar(
 @Composable
 fun PlaylistScreen(
     tracks: List<Track>,
+    favoriteIds: Set<String>,
+    unavailableIds: Set<String>,
+    onToggleFavorite: (Track) -> Unit,
     currentTrackIndex: Int,
     onTrackSelected: (Int) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 
-    val filteredTracks = remember(tracks, searchQuery) {
-        if (searchQuery.isBlank()) {
-            tracks
-        } else {
-            val query = searchQuery.trim().lowercase()
-            tracks.filter { track ->
-                track.title.lowercase().contains(query) ||
-                track.artist.lowercase().contains(query) ||
-                track.composer.lowercase().contains(query) ||
-                track.fileName.lowercase().contains(query)
-            }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    val trackSnapshot = tracks.toList()
+    val filteredTracks = remember(trackSnapshot, searchQuery, favoriteIds, favoritesOnly) {
+        val query = searchQuery.trim()
+        trackSnapshot.filter { track ->
+            (!favoritesOnly || track.uri.toString() in favoriteIds) &&
+                (query.isBlank() || listOf(track.title, track.artist, track.composer, track.fileName)
+                    .any { it.contains(query, ignoreCase = true) })
         }
     }
 
@@ -1964,6 +1685,13 @@ fun PlaylistScreen(
             }
         }
 
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(selected = !favoritesOnly, onClick = { favoritesOnly = false }, label = { Text("All tracks") })
+            FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = true }, label = { Text("Favorites") })
+        }
         HorizontalDivider(color = Color(0xFFBAE6FD), thickness = 1.dp)
 
         Box(modifier = Modifier.weight(1f)) {
@@ -1989,7 +1717,12 @@ fun PlaylistScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No tracks found matching \"$searchQuery\"",
+                        text = when {
+                            favoritesOnly && tracks.none { it.uri.toString() in favoriteIds } ->
+                                "No favorites yet. Tap a heart to save a song."
+                            favoritesOnly -> "No favorites match your search."
+                            else -> "No tracks match your search."
+                        },
                         fontSize = 14.sp,
                         color = Color(0xFF0369A1).copy(alpha = 0.6f),
                         textAlign = TextAlign.Center
@@ -1997,9 +1730,9 @@ fun PlaylistScreen(
                 }
             } else {
                 val listState = rememberLazyListState(
-                    initialFirstVisibleItemIndex = if (currentTrackIndex in tracks.indices) {
-                        (currentTrackIndex - 2).coerceAtLeast(0)
-                    } else 0
+                    initialFirstVisibleItemIndex = filteredTracks.indexOfFirst {
+                        it.uri == tracks.getOrNull(currentTrackIndex)?.uri
+                    }.let { (it - 2).coerceAtLeast(0) }
                 )
 
                 LazyColumn(
@@ -2008,10 +1741,10 @@ fun PlaylistScreen(
                         .fillMaxSize()
                         .drawVerticalScrollbar(listState)
                 ) {
-                    itemsIndexed(filteredTracks, key = { index, track -> "${track.uri}_$index" }) { index, track ->
+                    itemsIndexed(filteredTracks, key = { _, track -> track.uri.toString() }) { _, track ->
                         val originalIndex = tracks.indexOf(track)
                         val isCurrent = originalIndex == currentTrackIndex
-                        val displayIndex = if (searchQuery.isNotBlank()) originalIndex + 1 else index + 1
+                        val displayIndex = originalIndex + 1
 
                         Surface(
                             shape = RectangleShape,
@@ -2074,7 +1807,23 @@ fun PlaylistScreen(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
+                                    if (track.uri.toString() in unavailableIds) {
+                                        Text("Unavailable · tap to retry", color = Color(0xFF9F1239), fontSize = 12.sp)
+                                    }
                                 }
+                                FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
+                                    onToggleFavorite(track)
+                                }
+
+                                val isCached = TrackAudioAnalyzer.hasCache(context, track.fileName)
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(
+                                            color = if (isCached) Color(0xFF22C55E) else Color(0xFFEF4444),
+                                            shape = CircleShape
+                                        )
+                                )
                             }
                         }
 
@@ -2112,6 +1861,7 @@ fun CustomizeScreen(
     rightEyeColor: Color,
     onRightEyeColorChange: (Color) -> Unit,
     isBlinking: Boolean,
+    isSleepy: Boolean,
     squishProgress: Float,
     squishDirection: SquishDirection,
     isAutoSwaying: Boolean,
@@ -2230,6 +1980,7 @@ fun CustomizeScreen(
         ) {
             ShiroCharacter(
                 isBlinking = isBlinking,
+                isSleepy = isSleepy,
                 squishProgress = squishProgress,
                 squishDirection = squishDirection,
                 isAutoSwaying = isAutoSwaying,
@@ -2428,6 +2179,7 @@ fun ShiroCharacter(
     squishProgress: Float,
     squishDirection: SquishDirection,
     modifier: Modifier = Modifier,
+    isSleepy: Boolean = false,
     isAutoSwaying: Boolean = false,
     swaySkew: Float = 0f,
     leftEyeColor: Color = Color(0xFF201C1C),
@@ -2440,7 +2192,13 @@ fun ShiroCharacter(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    val showClosedEyes = isBlinking || isAutoSwaying || isPressed
+    val showClosedEyes = isBlinking || isPressed || (squishProgress > 0.1f) || (isAutoSwaying && !isSleepy)
+    val sleepyEyeScale by animateFloatAsState(
+        targetValue = if (isSleepy) 0.45f else 1f,
+        animationSpec = tween(durationMillis = 600),
+        label = "Sleepy eyes"
+    )
+    val eyeHeight = if (showClosedEyes) eyeScale else eyeScale * sleepyEyeScale
 
     val bodyScaleY = 1f - squishProgress * 0.22f
     val bodyScaleX = 1f + squishProgress * 0.16f
@@ -2502,7 +2260,7 @@ fun ShiroCharacter(
                     .offset(x = eyeOffsetX, y = eyeOffsetY)
                     .graphicsLayer(
                         scaleX = eyeScale,
-                        scaleY = eyeScale,
+                        scaleY = eyeHeight,
                         transformOrigin = TransformOrigin(0.5f, 0.5137f)
                     )
             )
@@ -2523,7 +2281,7 @@ fun ShiroCharacter(
                     .offset(x = eyeOffsetX, y = eyeOffsetY)
                     .graphicsLayer(
                         scaleX = eyeScale,
-                        scaleY = eyeScale,
+                        scaleY = eyeHeight,
                         transformOrigin = TransformOrigin(0.5f, 0.5137f)
                     )
             )
