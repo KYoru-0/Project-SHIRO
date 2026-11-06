@@ -462,7 +462,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
         val hitData = activeHitData
         if (isPlaying && hitData != null) {
             var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-            val debounceMs = ((60000f / hitData.estimatedBpm) / 2f).toLong().coerceIn(100L, 400L)
+            val debounceMs = ((60000f / hitData.estimatedBpm) / 4f).toLong().coerceIn(50L, 250L)
 
             var lastKickTime = -debounceMs
             var kickIdx = hitData.kicksMs.indexOfFirst { it >= lastPos }.let { if (it == -1) hitData.kicksMs.size else it }
@@ -853,6 +853,9 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 ) {
                                     val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        if (currentTrack != null) {
+                                            Spacer(modifier = Modifier.size(40.dp))
+                                        }
                                         Text(
                                             text = currentTrack?.title ?: "No Tracks Loaded",
                                             modifier = Modifier.weight(1f),
