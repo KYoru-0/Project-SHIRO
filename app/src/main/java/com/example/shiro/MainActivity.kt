@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -122,9 +123,14 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.shiro.ui.theme.ProjectSHIROTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -502,6 +508,7 @@ fun ColorSpectrumBar(
     )
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 fun ShiroScreen() {
     val context = LocalContext.current
@@ -555,11 +562,79 @@ fun ShiroScreen() {
 
     val squishProgress = remember { Animatable(0f) }
     val swaySkew = remember { Animatable(0f) }
+    val shiroOffsetX = remember { Animatable(0f) }
     var squishJob by remember { mutableStateOf<Job?>(null) }
+
+    fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
+        squishJob?.cancel()
+        squishJob = scope.launch {
+            if (squishProgress.value > 0.01f) {
+                squishProgress.animateTo(0f, tween(40, easing = FastOutSlowInEasing))
+            }
+            squishDirection = direction
+            squishProgress.animateTo(1f, tween(70, easing = FastOutSlowInEasing))
+            squishProgress.animateTo(0f, tween(110, easing = FastOutSlowInEasing))
+        }
+    }
 
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             setRepeatMode(Player.REPEAT_MODE_OFF)
+        }
+    }
+
+    var activeHitData by remember { mutableStateOf<TrackHitData?>(null) }
+
+    LaunchedEffect(tracks.toList()) {
+        if (tracks.isNotEmpty()) {
+            TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
+        }
+    }
+
+    LaunchedEffect(currentTrackIndex, tracks.size) {
+        if (currentTrackIndex in tracks.indices) {
+            val track = tracks[currentTrackIndex]
+            if (TrackAudioAnalyzer.hasCache(context, track.fileName)) {
+                activeHitData = TrackAudioAnalyzer.loadCachedHitData(context, track.fileName)
+            } else {
+                activeHitData = null
+                val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
+                activeHitData = data
+            }
+        } else {
+            activeHitData = null
+        }
+    }
+
+    LaunchedEffect(isPlaying, activeHitData, currentTrackIndex) {
+        val hitData = activeHitData
+        if (isPlaying && hitData != null) {
+            var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val debounceMs = ((60000f / hitData.estimatedBpm) / 2f).toLong().coerceIn(100L, 400L)
+
+            var lastKickTime = -debounceMs
+            var kickIdx = hitData.kicksMs.indexOfFirst { it >= lastPos }.let { if (it == -1) hitData.kicksMs.size else it }
+
+            while (isActive && isPlaying) {
+                val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+
+                if (curPos < lastPos - 300L) {
+                    kickIdx = hitData.kicksMs.indexOfFirst { it >= curPos }.let { if (it == -1) hitData.kicksMs.size else it }
+                    lastKickTime = -debounceMs
+                }
+                lastPos = curPos
+
+                while (kickIdx < hitData.kicksMs.size && curPos >= hitData.kicksMs[kickIdx]) {
+                    val kickTime = hitData.kicksMs[kickIdx]
+                    if (kickTime - lastKickTime >= debounceMs) {
+                        lastKickTime = kickTime
+                        triggerSquish(SquishDirection.CENTER)
+                    }
+                    kickIdx++
+                }
+
+                delay(20L)
+            }
         }
     }
 
@@ -909,119 +984,9 @@ fun ShiroScreen() {
         }
     }
 
-    LaunchedEffect(isAutoSquishing) {
-        if (isAutoSquishing) {
-            val directions = listOf(
-                SquishDirection.CENTER,
-                SquishDirection.LEFT,
-                SquishDirection.CENTER,
-                SquishDirection.RIGHT
-            )
-            var directionIndex = 0
-            try {
-                while (isActive) {
-                    val currentBpm = bpm
-                    val currentDurationSec = (0.3f - (currentBpm - 60f) * (0.2f / 120f)).coerceIn(0.1f, 0.3f)
-                    val totalMs = (currentDurationSec * 1000f).roundToInt().coerceAtLeast(60)
-                    val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(20)
-                    val reboundMs = (totalMs - compressMs).coerceAtLeast(20)
 
-                    val beatPeriodMs = (60000f / currentBpm).roundToInt()
-                    val restDelayMs = (beatPeriodMs - totalMs).coerceAtLeast(0)
 
-                    squishDirection = directions[directionIndex]
 
-                    squishProgress.animateTo(
-                        targetValue = 1f,
-                        animationSpec = tween(durationMillis = compressMs, easing = FastOutSlowInEasing)
-                    )
-                    squishProgress.animateTo(
-                        targetValue = 0f,
-                        animationSpec = tween(durationMillis = reboundMs, easing = FastOutSlowInEasing)
-                    )
-
-                    directionIndex = (directionIndex + 1) % directions.size
-
-                    if (restDelayMs > 0) {
-                        delay(restDelayMs.toLong())
-                    }
-                }
-            } finally {
-                squishDirection = SquishDirection.CENTER
-                squishProgress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing)
-                )
-            }
-        } else {
-            squishDirection = SquishDirection.CENTER
-            squishProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing)
-            )
-        }
-    }
-
-    LaunchedEffect(isAutoSwaying) {
-        if (isAutoSwaying) {
-            try {
-                var swayLeft = true
-                while (isActive) {
-                    val currentBpm = bpm
-                    val beatPeriodMs = (60000f / currentBpm).roundToInt().coerceAtLeast(100)
-                    val targetSkew = if (swayLeft) 0.18f else -0.18f
-
-                    swaySkew.animateTo(
-                        targetValue = targetSkew,
-                        animationSpec = tween(
-                            durationMillis = beatPeriodMs,
-                            easing = FastOutSlowInEasing
-                        )
-                    )
-
-                    swayLeft = !swayLeft
-                }
-            } finally {
-                swaySkew.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
-                )
-            }
-        } else {
-            swaySkew.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
-            )
-        }
-    }
-
-    fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
-        squishJob?.cancel()
-        squishJob = scope.launch {
-            if (squishProgress.value > 0.01f) {
-                val resetMaxDurationMs = (squishDurationSec * 200f).roundToInt().coerceIn(40, 90)
-                val returnMs = (squishProgress.value * resetMaxDurationMs).roundToInt().coerceAtLeast(25)
-                squishProgress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = returnMs, easing = FastOutSlowInEasing)
-                )
-            }
-            squishDirection = direction
-
-            val totalMs = (squishDurationSec * 1000f).roundToInt().coerceAtLeast(60)
-            val compressMs = (totalMs * 0.35f).roundToInt().coerceAtLeast(30)
-            val reboundMs = (totalMs - compressMs).coerceAtLeast(30)
-
-            squishProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = compressMs, easing = FastOutSlowInEasing)
-            )
-            squishProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = reboundMs, easing = FastOutSlowInEasing)
-            )
-        }
-    }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
 
@@ -1038,11 +1003,9 @@ fun ShiroScreen() {
             squishProgress = squishProgress.value,
             squishDirection = squishDirection,
             isAutoSwaying = isAutoSwaying,
-            swaySkew = swaySkew.value,
+            swaySkew = 0f,
             onCharacterTap = {
-                if (!isAutoSquishing && !isAutoSwaying) {
-                    triggerSquish(SquishDirection.CENTER)
-                }
+                triggerSquish(SquishDirection.CENTER)
             }
         )
     } else {
@@ -1102,8 +1065,9 @@ fun ShiroScreen() {
                                 eyeOffsetX = 5.dp,
                                 eyeOffsetY = 0.dp,
                                 modifier = Modifier
-                                    .fillMaxWidth(0.9f)
+                                    .fillMaxWidth(0.85f)
                                     .aspectRatio(1536f / 1024f)
+                                    .offset(x = shiroOffsetX.value.dp)
                             )
                         }
 
@@ -1333,75 +1297,6 @@ fun ShiroScreen() {
                                     )
                                 }
                             }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(0.95f),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Dance:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0369A1))
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Button(
-                                        onClick = { danceMode = DanceMode.SWAY },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.SWAY) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Sway", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    Button(
-                                        onClick = { danceMode = DanceMode.SQUISH },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.SQUISH) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Squish", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    Button(
-                                        onClick = { danceMode = DanceMode.OFF },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (danceMode == DanceMode.OFF) AccentColor else ButtonColor.copy(alpha = 0.5f)
-                                        ),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text("Off", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(0.95f),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Dance Tempo: ${bpm.roundToInt()} BPM",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0369A1)
-                                )
-                            }
-
-                            Slider(
-                                value = bpm,
-                                onValueChange = { bpm = it },
-                                valueRange = 60f..240f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = ButtonColor,
-                                    activeTrackColor = ButtonColor
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth(0.95f)
-                                    .height(24.dp)
-                            )
                         }
                     }
                 } else {
@@ -1517,6 +1412,38 @@ fun ShiroScreen() {
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF0369A1),
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+
+                        HorizontalDivider(color = Color(0xFFBAE6FD))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    isMenuOpen = false
+                                    TrackAudioAnalyzer.clearAllCache(context)
+                                    activeHitData = null
+                                    Toast.makeText(context, "Map cache deleted. Re-analyzing playlist...", Toast.LENGTH_SHORT).show()
+                                    TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
+                                    if (currentTrackIndex in tracks.indices) {
+                                        val track = tracks[currentTrackIndex]
+                                        scope.launch {
+                                            val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
+                                            activeHitData = data
+                                        }
+                                    }
+                                }
+                        ) {
+                            Text(
+                                text = "Delete Map Cache",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFEF4444),
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
@@ -1815,6 +1742,7 @@ fun PlaylistScreen(
     onTrackSelected: (Int) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -2075,6 +2003,16 @@ fun PlaylistScreen(
                                         )
                                     }
                                 }
+
+                                val isCached = TrackAudioAnalyzer.hasCache(context, track.fileName)
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(
+                                            color = if (isCached) Color(0xFF22C55E) else Color(0xFFEF4444),
+                                            shape = CircleShape
+                                        )
+                                )
                             }
                         }
 
@@ -2440,7 +2378,7 @@ fun ShiroCharacter(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    val showClosedEyes = isBlinking || isAutoSwaying || isPressed
+    val showClosedEyes = isBlinking || isPressed || (squishProgress > 0.1f)
 
     val bodyScaleY = 1f - squishProgress * 0.22f
     val bodyScaleX = 1f + squishProgress * 0.16f
