@@ -1354,7 +1354,19 @@ fun ShiroScreen(exoPlayer: MediaController) {
             onDismissRequest = { scanError = null },
             title = { Text("Couldn't refresh music") },
             text = { Text(message) },
-            confirmButton = { TextButton(onClick = { reloadMusicList() }) { Text("Retry") } },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        scanError = null
+                        isInputsPopupOpen = true
+                    }) {
+                        Text("Inputs")
+                    }
+                    TextButton(onClick = { reloadMusicList() }) {
+                        Text("Retry")
+                    }
+                }
+            },
             dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
         )
     }
