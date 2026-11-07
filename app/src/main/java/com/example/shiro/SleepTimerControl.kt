@@ -9,9 +9,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -97,13 +96,13 @@ fun SleepTimerControl(controller: MediaController, modifier: Modifier = Modifier
         }, ContextCompat.getMainExecutor(context))
     }
 
-    TextButton(onClick = { refresh(); showDialog = true }, modifier = modifier,
+    GlassTextButton(onClick = { refresh(); showDialog = true }, modifier = modifier,
         contentPadding = PaddingValues(16.dp)) {
-        Text(label, color = AccentColor, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+        Text(label, color = LocalPlayerColors.current.text, fontSize = 16.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth())
     }
     if (showDialog) {
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { if (!sending) showDialog = false },
             title = { Text("Sleep timer") },
             text = {
@@ -116,28 +115,30 @@ fun SleepTimerControl(controller: MediaController, modifier: Modifier = Modifier
                     if (active) Text(label)
                     if (finished) Text("The timer finished. Play music to wake Shiro, or restore the lighting below.")
                     if (deadline > 0L) {
-                        TextButton(
+                        GlassTextButton(
                             onClick = { setTimer(SleepTimer.EXTEND_FIVE) },
                             enabled = deadline > now && hasTracks && !sending,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().glassPanel(LocalPlayerColors.current, selected = true)
                         ) { Text("+5 minutes") }
                     }
                     if (!hasTracks) Text("Add a music folder in Inputs first.")
                     for (minutes in listOf(15, 30, 60)) {
-                        TextButton(onClick = { setTimer(minutes) }, enabled = hasTracks && !sending, modifier = Modifier.fillMaxWidth()) {
+                        GlassTextButton(onClick = { setTimer(minutes) }, enabled = hasTracks && !sending,
+                            modifier = Modifier.fillMaxWidth().glassPanel(LocalPlayerColors.current)) {
                             Text("$minutes minutes")
                         }
                     }
-                    TextButton(onClick = { setTimer(SleepTimer.AT_TRACK_END) }, enabled = hasTracks && !sending, modifier = Modifier.fillMaxWidth()) {
+                    GlassTextButton(onClick = { setTimer(SleepTimer.AT_TRACK_END) }, enabled = hasTracks && !sending,
+                        modifier = Modifier.fillMaxWidth().glassPanel(LocalPlayerColors.current, selected = endOfTrack)) {
                         Text("End of track")
                     }
                     Text("Minute timers keep counting while music is paused. If you skip a song, End of track follows the new song.")
-                    error?.let { Text(it) }
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
-            confirmButton = { TextButton(onClick = { showDialog = false }, enabled = !sending) { Text("Close") } },
+            confirmButton = { GlassTextButton(onClick = { showDialog = false }, enabled = !sending) { Text("Close") } },
             dismissButton = {
-                if (active || finished) TextButton(onClick = { setTimer(SleepTimer.CANCEL) }, enabled = !sending) {
+                if (active || finished) GlassTextButton(onClick = { setTimer(SleepTimer.CANCEL) }, enabled = !sending) {
                     Text(if (active) "Cancel timer" else "Restore lighting")
                 }
             }

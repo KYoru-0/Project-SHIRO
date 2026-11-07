@@ -2,56 +2,61 @@ package com.example.shiro
 
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.math.hypot
+import kotlin.math.PI
+import kotlin.math.abs
 
 internal data class CatPoint(val x: Float, val y: Float)
 internal data class CatOutline(val points: List<CatPoint>) {
     val left = points.minOf { it.x }
     val right = points.maxOf { it.x }
-    val bottom = points.minOf { it.y }
+    val supportPoint = points.minBy { it.y }
+    val bottom = supportPoint.y
     val top = points.maxOf { it.y }
     val support get() = -bottom
+    private var cachedCollision: CatCollisionShape? = null
+    // Only overlapping cats need this; reuse it when several neighbors touch the same outline.
+    fun collisionShape(): CatCollisionShape = cachedCollision
+        ?: CatCollisionShape(points).also { cachedCollision = it }
 }
 
-/** Excludes transparent padding and the faint painted glow. Coordinates are normalized. */
+/** Trace the star-shaped artwork from its core, preserving the ears and other concavities.
+ * Coordinates are normalized; the alpha threshold excludes transparent padding and glow.
+ */
 internal fun opaqueCatHull(width: Int, height: Int, alpha: (Int, Int) -> Int): List<CatPoint> {
-    val edges = mutableListOf<CatPoint>()
-    for (y in 0 until height) {
-        val first = (0 until width).firstOrNull { alpha(it, y) >= 200 } ?: continue
-        val last = (width - 1 downTo first).first { alpha(it, y) >= 200 }
-        edges.add(CatPoint(first.toFloat() / width, y.toFloat() / height))
-        edges.add(CatPoint((last + 1f) / width, (y + 1f) / height))
-    }
-    return convexCatHull(edges)
-}
-
-private fun cross(a: CatPoint, b: CatPoint, c: CatPoint) =
-    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
-
-internal fun convexCatHull(points: List<CatPoint>): List<CatPoint> {
-    val sorted = points.distinct().sortedWith(compareBy<CatPoint> { it.x }.thenBy { it.y })
-    require(sorted.size >= 3)
-    fun half(input: List<CatPoint>): MutableList<CatPoint> {
-        val result = mutableListOf<CatPoint>()
-        input.forEach { point ->
-            while (result.size >= 2 && cross(result[result.lastIndex - 1], result.last(), point) <= 0f) result.removeAt(result.lastIndex)
-            result.add(point)
+    val centerX = width * JELLY_CORE_U
+    val centerY = height * JELLY_CORE_V
+    return List(96) { ray ->
+        val angle = ray * 2.0 * PI / 96
+        val dx = cos(angle).toFloat()
+        val dy = sin(angle).toFloat()
+        var radius = hypot(width.toFloat(), height.toFloat())
+        while (radius > 0f) {
+            val x = centerX + dx * radius
+            val y = centerY + dy * radius
+            if (x >= 0f && x < width && y >= 0f && y < height && alpha(x.toInt(), y.toInt()) >= 200) break
+            radius -= 0.5f
         }
-        result.removeAt(result.lastIndex)
-        return result
+        CatPoint((centerX + dx * radius) / width, (centerY + dy * radius) / height)
     }
-    return half(sorted) + half(sorted.asReversed())
 }
 
 /** Samples the same triangle mesh as the renderer, then rotates into physics coordinates (Y up). */
 internal fun deformCatOutline(hull: List<CatPoint>, width: Float, height: Float,
-    jelly: Float, bend: Float, rotation: Float, contact: WaveContact? = null): CatOutline {
-    val mesh = FloatArray((JELLY_COLUMNS + 1) * (JELLY_ROWS + 1) * 2)
+    jelly: Float, bend: Float, rotation: Float, contact: WaveContact? = null,
+    mesh: FloatArray = FloatArray((JELLY_COLUMNS + 1) * (JELLY_ROWS + 1) * 2)): CatOutline {
     updateJellyMesh(mesh, width, height, jelly, bend, contact)
+    return outlineFromMesh(hull, width, height, rotation, mesh)
+}
+
+internal fun outlineFromMesh(hull: List<CatPoint>, width: Float, height: Float,
+    rotation: Float, mesh: FloatArray): CatOutline {
     val radians = Math.toRadians(rotation.toDouble())
     val c = cos(radians).toFloat()
     val s = sin(radians).toFloat()
-    val transformed = hull.map { point ->
+    val transformed = ArrayList<CatPoint>(hull.size)
+    for (index in hull.lastIndex downTo 0) {
+        val point = hull[index]
         val gx = point.x * JELLY_COLUMNS
         val gy = point.y * JELLY_ROWS
         val column = gx.toInt().coerceAtMost(JELLY_COLUMNS - 1)
@@ -69,77 +74,33 @@ internal fun deformCatOutline(hull: List<CatPoint>, width: Float, height: Float,
         }
         val x = interpolate(0) - width * 0.5f
         val y = interpolate(1) - height * 0.55f
-        CatPoint(c * x - s * y, -(s * x + c * y))
+        transformed.add(CatPoint(c * x - s * y, -(s * x + c * y)))
     }
-    return CatOutline(convexCatHull(transformed))
+    // Rebuilding a convex hull here would erase the very dent the renderer just made.
+    return CatOutline(transformed)
 }
 
 internal fun CatOutline.contains(x: Float, y: Float): Boolean {
-    val point = CatPoint(x, y)
-    return points.indices.all { cross(points[it], points[(it + 1) % points.size], point) >= -0.001f }
+    if (x < left || x > right || y < bottom || y > top) return false
+    var inside = false
+    for (i in points.indices) {
+        val a = points[i]
+        val b = points[if (i == points.lastIndex) 0 else i + 1]
+        if (abs((b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)) < 0.0001f &&
+            ((x >= a.x && x <= b.x) || (x >= b.x && x <= a.x)) &&
+            ((y >= a.y && y <= b.y) || (y >= b.y && y <= a.y))) return true
+        if ((a.y > y) != (b.y > y) && x < a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y)) inside = !inside
+    }
+    return inside
 }
 
 /** Lowest safe center height when the silhouette meets the sampled wave. */
-internal data class CatWaveSample(val centerHeight: Float, val point: CatPoint)
+internal data class CatWaveSample(val centerHeight: Float, val point: CatPoint, val surfaceHeight: Float,
+    val hit: CatPoint, val surfaceId: Int = -2, val normalX: Float = 0f, val normalY: Float = 1f,
+    val contactWidth: Float = 0f)
 
 internal fun catWaveCenterHeight(shape: CatOutline, bands: FloatArray, x: Float, width: Float, amplitude: Float): Float =
     sampleCatWave(shape, bands, x, width, amplitude).centerHeight
 
-internal fun sampleCatWave(shape: CatOutline, bands: FloatArray, x: Float, width: Float, amplitude: Float): CatWaveSample {
-    var floor = Float.NEGATIVE_INFINITY
-    var weightSum = 0f
-    var contactX = 0f
-    var contactY = 0f
-    shape.points.forEachIndexed { index, p ->
-        val q = shape.points[(index + 1) % shape.points.size]
-        val samples = kotlin.math.ceil(kotlin.math.abs(q.x - p.x) / 3f).toInt().coerceAtLeast(1)
-        for (sample in 0..samples) {
-            val t = sample.toFloat() / samples
-            val px = p.x + (q.x - p.x) * t
-            val py = p.y + (q.y - p.y) * t
-            val required = waveHeightAt(bands, (x + px) / width) * amplitude - py
-            if (required > floor) {
-                val scale = kotlin.math.exp((floor - required) / 2f)
-                weightSum *= scale; contactX *= scale; contactY *= scale
-                floor = required
-            }
-            val weight = kotlin.math.exp((required - floor) / 2f)
-            weightSum += weight
-            contactX += px * weight
-            contactY += py * weight
-        }
-    }
-    return CatWaveSample(floor, CatPoint(contactX / weightSum, contactY / weightSum))
-}
-
-/** Separating-axis test. Returns the smallest overlap directed from A toward B. */
-internal fun catOverlap(a: CatOutline, ax: Float, ay: Float, b: CatOutline, bx: Float, by: Float): CatPoint? {
-    var least = Float.POSITIVE_INFINITY
-    var normal = CatPoint(0f, 0f)
-    for (outline in listOf(a, b)) for (index in outline.points.indices) {
-        val p = outline.points[index]
-        val q = outline.points[(index + 1) % outline.points.size]
-        val length = sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y))
-        if (length < 0.0001f) continue
-        var nx = -(q.y - p.y) / length
-        var ny = (q.x - p.x) / length
-        var aMin = Float.POSITIVE_INFINITY; var aMax = Float.NEGATIVE_INFINITY
-        var bMin = Float.POSITIVE_INFINITY; var bMax = Float.NEGATIVE_INFINITY
-        for (point in a.points) {
-            val projection = (point.x + ax) * nx + (point.y + ay) * ny
-            aMin = minOf(aMin, projection); aMax = maxOf(aMax, projection)
-        }
-        for (point in b.points) {
-            val projection = (point.x + bx) * nx + (point.y + by) * ny
-            bMin = minOf(bMin, projection); bMax = maxOf(bMax, projection)
-        }
-        if (aMax <= bMin || bMax <= aMin) return null
-        val overlap = minOf(aMax - bMin, bMax - aMin)
-        if (overlap < least) {
-            least = overlap
-            if ((bx - ax) * nx + (by - ay) * ny < 0f) { nx = -nx; ny = -ny }
-            normal = CatPoint(nx * overlap, ny * overlap)
-        }
-    }
-    return normal
-}
+internal fun sampleCatWave(shape: CatOutline, bands: FloatArray, x: Float, width: Float, amplitude: Float,
+    sampler: CatWaveSampler = CatWaveSampler()): CatWaveSample = sampler.sample(shape, bands, x, width, amplitude)

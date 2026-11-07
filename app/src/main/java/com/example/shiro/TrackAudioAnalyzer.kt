@@ -7,15 +7,18 @@ import android.media.MediaFormat
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.sqrt
 
@@ -28,13 +31,16 @@ data class TrackHitData(
 
 @OptIn(UnstableApi::class)
 object TrackAudioAnalyzer {
+    private val analysisLock = Mutex()
+    private val mutableCacheRevision = MutableStateFlow(0)
+    val cacheRevision = mutableCacheRevision.asStateFlow()
 
-    fun hasCache(context: Context, fileName: String): Boolean {
+    suspend fun hasCache(context: Context, fileName: String): Boolean = withContext(Dispatchers.IO) {
         val cacheFile = File(context.cacheDir, "hits_${fileName.hashCode()}.json")
-        return cacheFile.exists() && cacheFile.length() > 0
+        cacheFile.exists() && cacheFile.length() > 0
     }
 
-    fun loadCachedHitData(context: Context, fileName: String): TrackHitData? {
+    private fun loadCachedHitData(context: Context, fileName: String): TrackHitData? {
         return try {
             val cacheFile = File(context.cacheDir, "hits_${fileName.hashCode()}.json")
             if (!cacheFile.exists() || cacheFile.length() <= 0) return null
@@ -54,19 +60,30 @@ object TrackAudioAnalyzer {
         }
     }
 
-    fun clearAllCache(context: Context) {
-        try {
-            context.cacheDir.listFiles()?.forEach { file ->
-                if (file.name.startsWith("hits_") && file.name.endsWith(".json")) {
-                    file.delete()
+    suspend fun clearAllCache(context: Context) = withContext(Dispatchers.IO) {
+        analysisLock.withLock {
+            try {
+                context.cacheDir.listFiles()?.forEach { file ->
+                    if (file.name.startsWith("hits_") && file.name.endsWith(".json")) {
+                        file.delete()
+                    }
                 }
-            }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+            mutableCacheRevision.value++
+        }
     }
 
-    suspend fun analyzeTrack(context: Context, uri: Uri, fileName: String): TrackHitData = withContext(Dispatchers.Default) {
+    suspend fun analyzeTrack(context: Context, uri: Uri, fileName: String): TrackHitData = withContext(Dispatchers.IO) {
+        // Serialize cache reads and decoding: two requesters must never decode the same song together.
+        analysisLock.withLock { analyzeTrackLocked(context, uri, fileName) }
+    }
+
+    private suspend fun analyzeTrackLocked(context: Context, uri: Uri, fileName: String): TrackHitData {
+        val job = currentCoroutineContext()
+        job.ensureActive()
         val cached = loadCachedHitData(context, fileName)
-        if (cached != null) return@withContext cached
+        job.ensureActive()
+        if (cached != null) return cached
 
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -90,7 +107,7 @@ object TrackAudioAnalyzer {
             }
 
             if (audioTrackIndex == -1 || format == null) {
-                return@withContext generateFallbackHitData(120f)
+                return generateFallbackHitData(120f)
             }
 
             extractor.selectTrack(audioTrackIndex)
@@ -105,8 +122,8 @@ object TrackAudioAnalyzer {
             val bufferInfo = MediaCodec.BufferInfo()
             var isEOS = false
 
-            val pcmAccumulator = ArrayList<Short>(4096)
             val chunkSizeSamples = (sampleRate * 0.02f).toInt() * channelCount
+            val pcmWindows = PcmWindowBuffer(chunkSizeSamples)
 
             var currentSampleTimeUs = 0L
 
@@ -122,8 +139,9 @@ object TrackAudioAnalyzer {
             var prevELow = 0f
             var movingAvgKick = 0f
 
-            while (!isEOS) {
-                val inIndex = codec.dequeueInputBuffer(5000L)
+            while (true) {
+                job.ensureActive()
+                val inIndex = if (isEOS) -1 else codec.dequeueInputBuffer(5000L)
                 if (inIndex >= 0) {
                     val inputBuffer = codec.getInputBuffer(inIndex)
                     if (inputBuffer != null) {
@@ -146,16 +164,9 @@ object TrackAudioAnalyzer {
                         outputBuffer.position(bufferInfo.offset)
                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                         val shortBuffer = outputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                        val pcmShorts = ShortArray(shortBuffer.remaining())
-                        shortBuffer.get(pcmShorts)
-
                         currentSampleTimeUs = bufferInfo.presentationTimeUs
-
-                        for (s in pcmShorts) {
-                            pcmAccumulator.add(s)
-                        }
-
-                        while (pcmAccumulator.size >= chunkSizeSamples) {
+                        pcmWindows.consume(shortBuffer) { pcmSamples ->
+                            job.ensureActive()
                             val chunkTimeMs = (currentSampleTimeUs / 1000L)
 
                             var sumLow = 0f
@@ -164,7 +175,7 @@ object TrackAudioAnalyzer {
 
                             var k = 0
                             while (k < chunkSizeSamples - 1) {
-                                val rawSample = pcmAccumulator[k] / 32768f
+                                val rawSample = pcmSamples[k] / 32768f
 
                                 lpLow += alphaLow * (rawSample - lpLow)
                                 lpHigh += alphaHigh * (rawSample - lpHigh)
@@ -178,8 +189,6 @@ object TrackAudioAnalyzer {
 
                                 k += channelCount
                             }
-
-                            pcmAccumulator.subList(0, chunkSizeSamples).clear()
 
                             if (sampleCount > 0) {
                                 val rawELow = sqrt((sumLow / sampleCount).toDouble()).toFloat()
@@ -235,12 +244,17 @@ object TrackAudioAnalyzer {
                 estimatedBpm = estimatedBpm
             )
 
+            job.ensureActive()
             saveHitDataToCache(context, fileName, hitData)
-            hitData
+            return hitData
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
-            generateFallbackHitData(120f)
+            job.ensureActive()
+            return generateFallbackHitData(120f)
         } finally {
-            try { codec?.stop(); codec?.release() } catch (_: Exception) {}
+            try { codec?.stop() } catch (_: Exception) {}
+            try { codec?.release() } catch (_: Exception) {}
             try { extractor.release() } catch (_: Exception) {}
         }
     }
@@ -287,21 +301,18 @@ object TrackAudioAnalyzer {
             obj.put("chunkBalances", JSONArray(data.chunkBalances.toList()))
             obj.put("bpm", data.estimatedBpm.toDouble())
             cacheFile.writeText(obj.toString())
+            mutableCacheRevision.value++
         } catch (_: Exception) {}
     }
 }
 
 object TrackAnalysisWorker {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    fun processPlaylistInBackground(context: Context, tracks: List<Track>) {
+    suspend fun processPlaylistInBackground(context: Context, tracks: List<Track>) {
         val appContext = context.applicationContext
-        val trackList = tracks.toList()
-        scope.launch {
-            for (track in trackList) {
-                if (!TrackAudioAnalyzer.hasCache(appContext, track.fileName)) {
-                    TrackAudioAnalyzer.analyzeTrack(appContext, track.uri, track.fileName)
-                }
+        for (track in tracks) {
+            currentCoroutineContext().ensureActive()
+            if (!TrackAudioAnalyzer.hasCache(appContext, track.fileName)) {
+                TrackAudioAnalyzer.analyzeTrack(appContext, track.uri, track.fileName)
             }
         }
     }

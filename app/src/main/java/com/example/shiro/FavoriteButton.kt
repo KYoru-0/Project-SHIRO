@@ -1,9 +1,13 @@
 package com.example.shiro
 
 import android.content.Context
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 
@@ -17,12 +21,15 @@ fun saveFavoriteIds(context: Context, ids: Set<String>) {
 }
 
 @Composable
-fun FavoriteButton(isFavorite: Boolean, title: String, onToggle: () -> Unit) {
-    IconToggleButton(checked = isFavorite, onCheckedChange = { onToggle() }) {
+fun FavoriteButton(isFavorite: Boolean, title: String, tint: Color? = null, onToggle: () -> Unit) {
+    val interactions = remember { MutableInteractionSource() }
+    IconToggleButton(checked = isFavorite, onCheckedChange = { onToggle() }, interactionSource = interactions,
+        modifier = Modifier.glassPressFeedback(interactions, shape = CircleShape)
+            .glassPanel(LocalPlayerColors.current, CircleShape, selected = isFavorite)) {
         Icon(
             painter = painterResource(if (isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline),
             contentDescription = if (isFavorite) "Remove $title from favorites" else "Add $title to favorites",
-            tint = if (isFavorite) Color(0xFFC24169) else AccentColor
+            tint = tint ?: LocalPlayerColors.current.accent
         )
     }
 }

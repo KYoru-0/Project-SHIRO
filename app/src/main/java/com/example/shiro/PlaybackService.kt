@@ -51,9 +51,7 @@ class PlaybackService : MediaSessionService() {
             if (!PlaybackSpectrum.visible || !player.isPlaying) return
             val frame = spectrum.currentFrame()
             val gain = player.volume.coerceIn(0f, 1f)
-            PlaybackSpectrum.publish(if (gain == 1f) frame else SpectrumFrame(
-                FloatArray(frame.bands.size) { frame.bands[it] * gain }, frame.bassEnergy * gain
-            ))
+            PlaybackSpectrum.publish(frame.attenuated(gain))
             handler.postDelayed(this, 33L)
         }
     }
@@ -120,7 +118,11 @@ class PlaybackService : MediaSessionService() {
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
                     val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                    if (controller.packageName == packageName) commands.add(SleepTimer.command)
+                    if (controller.packageName == packageName) {
+                        commands.add(SleepTimer.command)
+                        commands.add(WidgetControl.command)
+                        ShiroWidgetUpdates.publish(this@PlaybackService, player, pendingRecovery != null)
+                    }
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(commands.build())
                         .build()
@@ -132,6 +134,13 @@ class PlaybackService : MediaSessionService() {
                     customCommand: SessionCommand,
                     args: Bundle
                 ): ListenableFuture<SessionResult> {
+                    if (controller.packageName == packageName && customCommand.customAction == WidgetControl.ACTION) {
+                        val action = WidgetAction.entries.firstOrNull { it.name == args.getString(WidgetControl.EXTRA) }
+                            ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                        val accepted = WidgetControl.execute(player, action)
+                        ShiroWidgetUpdates.publish(this@PlaybackService, player, pendingRecovery != null)
+                        return Futures.immediateFuture(SessionResult(if (accepted) SessionResult.RESULT_SUCCESS else SessionError.ERROR_INVALID_STATE))
+                    }
                     val minutes = args.getInt(SleepTimer.MINUTES, Int.MIN_VALUE)
                     if (controller.packageName != packageName || customCommand.customAction != SleepTimer.ACTION ||
                         !SleepTimer.isValid(minutes) || (minutes != SleepTimer.CANCEL && player.mediaItemCount == 0)) {
@@ -216,6 +225,7 @@ class PlaybackService : MediaSessionService() {
                 persistPlayback()
                 handler.removeCallbacks(checkpoint)
                 if (player.isPlaying) handler.postDelayed(checkpoint, 5_000L)
+                ShiroWidgetUpdates.publish(this@PlaybackService, player, pendingRecovery != null)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -255,6 +265,7 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         })
+        ShiroWidgetUpdates.publish(this, player)
     }
 
     private fun updateSpectrumLoop() {
@@ -423,6 +434,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         persistPlayback()
+        ShiroWidgetUpdates.stopped(this)
         PlaybackSpectrum.onVisibilityChanged = null
         handler.removeCallbacksAndMessages(null)
         session?.release()

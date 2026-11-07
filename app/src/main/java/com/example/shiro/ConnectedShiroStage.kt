@@ -31,7 +31,13 @@ fun ConnectedShiroStage(
     leftEyeColor: Color,
     rightEyeColor: Color,
     artwork: TrackArtwork? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    revealOnEntry: Boolean = true,
+    onRevealStarted: () -> Unit = {},
+    visualizerMode: VisualizerMode = VisualizerMode.SPECTRUM,
+    visualizerLayout: VisualizerLayout = VisualizerLayout.FLOOR,
+    trackKey: String? = null,
+    onBackdropFrame: (MusicBackdropFrame) -> Unit = {}
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var frame by remember { mutableStateOf(SpectrumFrame(FloatArray(24), 0f)) }
@@ -72,7 +78,14 @@ fun ConnectedShiroStage(
         leftEyeColor = leftEyeColor,
         rightEyeColor = rightEyeColor,
         spectrum = frame.bands,
+        dynamics = frame.dynamics,
         artwork = artwork,
+        revealOnEntry = revealOnEntry,
+        onRevealStarted = onRevealStarted,
+        visualizerMode = visualizerMode,
+        visualizerLayout = visualizerLayout,
+        trackKey = trackKey,
+        onBackdropFrame = onBackdropFrame,
         isVisible = visible && foreground,
         modifier = modifier
     )

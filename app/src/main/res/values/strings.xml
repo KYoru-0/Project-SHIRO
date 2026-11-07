@@ -1,3 +1,26 @@
 <resources>
     <string name="app_name">SHIRO</string>
+    <string name="startup_loading">Getting Shiro ready…</string>
+    <string name="startup_slow">Taking a little longer…</string>
+    <string name="startup_failed">Couldn\'t open your music player.</string>
+    <string name="startup_retry_hint">You can try connecting again.</string>
+    <string name="startup_retry">Try again</string>
+    <string name="widget_name">Shiro player</string>
+    <string name="widget_description">Your music, playback controls, and a little Shiro on your home screen.</string>
+    <string name="widget_add">Add home widget</string>
+    <string name="widget_add_manually">Long-press your home screen, open Widgets, and choose Shiro player.</string>
+    <string name="widget_empty_status">SHIRO</string>
+    <string name="widget_playing">Playing</string>
+    <string name="widget_paused">Paused</string>
+    <string name="widget_loading">Loading…</string>
+    <string name="widget_waiting">Waiting to play</string>
+    <string name="widget_error">Open Shiro to retry</string>
+    <string name="widget_open_player">Open Shiro</string>
+    <string name="widget_add_music">Open Shiro to add music</string>
+    <string name="widget_cat_awake">Shiro is awake. Open player.</string>
+    <string name="widget_cat_resting">Shiro is resting. Open player.</string>
+    <string name="widget_play">Play</string>
+    <string name="widget_pause">Pause</string>
+    <string name="widget_previous">Previous track</string>
+    <string name="widget_next">Next track</string>
 </resources>

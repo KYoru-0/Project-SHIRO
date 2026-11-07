@@ -24,8 +24,9 @@ data class TrackArtwork(val image: ImageBitmap, val colors: List<Color>)
 @Composable
 fun rememberTrackArtwork(uri: Uri?): TrackArtwork? {
     val context = LocalContext.current.applicationContext
-    // Changing tracks clears the previous cover immediately; cancelled loads cannot publish it later.
-    var artwork by remember(uri) { mutableStateOf<TrackArtwork?>(null) }
+    // Hold the current cover until the next load resolves, then crossfade directly to it (or no art).
+    // LaunchedEffect cancellation prevents an older load from replacing the latest selection.
+    var artwork by remember { mutableStateOf<TrackArtwork?>(null) }
     LaunchedEffect(uri) {
         artwork = if (uri == null) null else withContext(Dispatchers.IO) { loadTrackArtwork(context, uri) }
     }
@@ -52,7 +53,9 @@ private fun loadTrackArtwork(context: Context, uri: Uri): TrackArtwork? = try {
             val pixels = IntArray(48 * 48)
             thumbnail.getPixels(pixels, 0, 48, 0, 0, 48, 48)
             if (thumbnail !== it) thumbnail.recycle()
-            TrackArtwork(it.asImageBitmap(), artworkPalette(pixels).map { color -> Color(color) })
+            val colors = artworkPalette(pixels).map { color -> Color(color) }
+            // Display the decoded cover directly. The UI supplies opacity; no blur or tiny upscale.
+            TrackArtwork(it.asImageBitmap(), colors)
         }
     }
 } catch (cancelled: CancellationException) {

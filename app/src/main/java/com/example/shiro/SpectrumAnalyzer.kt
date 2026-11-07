@@ -22,6 +22,8 @@ internal class SpectrumAnalyzer(
     private val imaginary = DoubleArray(windowSize)
     private val powers = DoubleArray(windowSize / 2 + 1)
     private val smoothed = FloatArray(SpectrumFrame.BAND_COUNT)
+    private val rawLevels = FloatArray(SpectrumFrame.BAND_COUNT)
+    private val rhythm = RhythmTracker(SpectrumFrame.BAND_COUNT)
     private var writeIndex = 0
     private var samplesSeen = 0
     private var samplesSinceFrame = 0
@@ -38,6 +40,7 @@ internal class SpectrumAnalyzer(
     fun reset() {
         samples.forEach { it.fill(0f) }
         smoothed.fill(0f)
+        rhythm.reset()
         writeIndex = 0
         samplesSeen = 0
         samplesSinceFrame = 0
@@ -63,9 +66,12 @@ internal class SpectrumAnalyzer(
 
     private fun analyze(): SpectrumFrame {
         powers.fill(0.0)
+        var squareSum = 0.0
         for (channel in 0 until channels) {
             for (i in 0 until windowSize) {
-                real[i] = samples[channel][(writeIndex + i) % windowSize] * hann[i]
+                val sample = samples[channel][(writeIndex + i) % windowSize].toDouble()
+                squareSum += sample * sample
+                real[i] = sample * hann[i]
                 imaginary[i] = 0.0
             }
             fft()
@@ -88,14 +94,23 @@ internal class SpectrumAnalyzer(
             var peakPower = 0.0
             for (bin in first..last) peakPower = max(peakPower, powers[bin])
             val decibels = 10.0 * log10(peakPower.coerceAtLeast(1e-12))
-            val level = ((decibels + 65.0) / 65.0).toFloat().coerceIn(0f, 1f)
-            val timeConstant = if (level > smoothed[band]) 0.035 else 0.18
-            val blend = (1.0 - exp(-hopSize.toDouble() / sampleRate / timeConstant)).toFloat()
+            rawLevels[band] = ((decibels + 65.0) / 65.0).toFloat().coerceIn(0f, 1f)
+        }
+        val dynamics = rhythm.step(rawLevels, squareSum / (windowSize.toDouble() * channels),
+            hopSize.toFloat() / sampleRate)
+        val fast = dynamics.tempoDrive
+        val lastBassBand = bandForFrequency(250.0)
+        val stepSeconds = hopSize.toDouble() / sampleRate
+        val rise = (1.0 - exp(-stepSeconds / (0.035 - 0.016 * fast))).toFloat()
+        val fall = (1.0 - exp(-stepSeconds / (0.18 - 0.09 * fast))).toFloat()
+        for (band in output.indices) {
+            val level = rawLevels[band]
+            val blend = if (level > smoothed[band]) rise else fall
             smoothed[band] += blend * (level - smoothed[band])
             output[band] = smoothed[band].let { if (it < 0.001f) 0f else it.coerceIn(0f, 1f) }
-            if (lowHz < 250.0) bass = max(bass, output[band])
+            if (band <= lastBassBand) bass = max(bass, output[band])
         }
-        return SpectrumFrame(output, bass)
+        return SpectrumFrame(output, bass, dynamics)
     }
 
     /** In-place radix-2 FFT; all scratch arrays are reused. */
