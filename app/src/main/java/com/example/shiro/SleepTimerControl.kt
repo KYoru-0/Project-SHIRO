@@ -5,6 +5,7 @@ import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -34,13 +37,14 @@ import kotlinx.coroutines.isActive
 
 @OptIn(UnstableApi::class)
 @Composable
-fun SleepTimerControl(controller: MediaController) {
+fun SleepTimerControl(controller: MediaController, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var showDialog by remember { mutableStateOf(false) }
     var deadline by remember(controller) { mutableLongStateOf(controller.sessionExtras.getLong(SleepTimer.DEADLINE)) }
     var endOfTrack by remember(controller) { mutableStateOf(controller.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK)) }
+    var finished by remember(controller) { mutableStateOf(controller.sessionExtras.getBoolean(SleepTimer.FINISHED)) }
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var error by remember { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
@@ -49,6 +53,7 @@ fun SleepTimerControl(controller: MediaController) {
     fun refresh() {
         deadline = controller.sessionExtras.getLong(SleepTimer.DEADLINE)
         endOfTrack = controller.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK)
+        finished = controller.sessionExtras.getBoolean(SleepTimer.FINISHED)
         now = SystemClock.elapsedRealtime()
         hasTracks = controller.mediaItemCount > 0
     }
@@ -64,6 +69,7 @@ fun SleepTimerControl(controller: MediaController) {
     val label = when {
         endOfTrack -> "Sleep: end of track"
         deadline > 0L -> "Sleep: ${formatTime((deadline - now).coerceAtLeast(0L))}"
+        finished -> "Shiro is sleeping"
         else -> "Sleep timer"
     }
 
@@ -91,7 +97,11 @@ fun SleepTimerControl(controller: MediaController) {
         }, ContextCompat.getMainExecutor(context))
     }
 
-    TextButton(onClick = { refresh(); showDialog = true }) { Text(label, color = AccentColor) }
+    TextButton(onClick = { refresh(); showDialog = true }, modifier = modifier,
+        contentPadding = PaddingValues(16.dp)) {
+        Text(label, color = AccentColor, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth())
+    }
     if (showDialog) {
         AlertDialog(
             onDismissRequest = { if (!sending) showDialog = false },
@@ -104,6 +114,7 @@ fun SleepTimerControl(controller: MediaController) {
                     Text("Pause music after a set time, or when the track finishes.")
                     Text("Music gently fades during the final 30 seconds. Shiro gets sleepy while the timer is on.")
                     if (active) Text(label)
+                    if (finished) Text("The timer finished. Play music to wake Shiro, or restore the lighting below.")
                     if (deadline > 0L) {
                         TextButton(
                             onClick = { setTimer(SleepTimer.EXTEND_FIVE) },
@@ -126,7 +137,9 @@ fun SleepTimerControl(controller: MediaController) {
             },
             confirmButton = { TextButton(onClick = { showDialog = false }, enabled = !sending) { Text("Close") } },
             dismissButton = {
-                if (active) TextButton(onClick = { setTimer(SleepTimer.CANCEL) }, enabled = !sending) { Text("Cancel timer") }
+                if (active || finished) TextButton(onClick = { setTimer(SleepTimer.CANCEL) }, enabled = !sending) {
+                    Text(if (active) "Cancel timer" else "Restore lighting")
+                }
             }
         )
     }

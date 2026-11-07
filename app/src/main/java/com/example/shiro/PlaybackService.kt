@@ -1,6 +1,7 @@
 package com.example.shiro
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -14,6 +15,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -30,6 +34,7 @@ class PlaybackService : MediaSessionService() {
     private val handler = Handler(Looper.getMainLooper())
     private var sleepDeadline = 0L
     private var sleepAtTrackEnd = false
+    private var sleepFinished = false
     private var volumeBeforeFade: Float? = null
     private var fadeStartRemainingMs = 0L
     private var fadeStartVolume = 1f
@@ -39,6 +44,19 @@ class PlaybackService : MediaSessionService() {
     private var recoveryMessage = ""
     private var pendingRecovery: Runnable? = null
     private var recoverySeekTarget: String? = null
+    private lateinit var spectrum: SpectrumEngine
+
+    private val spectrumTick = object : Runnable {
+        override fun run() {
+            if (!PlaybackSpectrum.visible || !player.isPlaying) return
+            val frame = spectrum.currentFrame()
+            val gain = player.volume.coerceIn(0f, 1f)
+            PlaybackSpectrum.publish(if (gain == 1f) frame else SpectrumFrame(
+                FloatArray(frame.bands.size) { frame.bands[it] * gain }, frame.bassEnergy * gain
+            ))
+            handler.postDelayed(this, 33L)
+        }
+    }
 
     private val checkpoint = object : Runnable {
         override fun run() {
@@ -53,6 +71,7 @@ class PlaybackService : MediaSessionService() {
                 finishSleep()
             } else {
                 updateSleepFade()
+                publishSleepState()
                 handler.postDelayed(this, if (volumeBeforeFade != null && player.isPlaying) 100L else 1_000L)
             }
         }
@@ -60,7 +79,21 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        player = ExoPlayer.Builder(this)
+        spectrum = SpectrumEngine()
+        val renderers = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink = SpectrumAudioSink(
+                DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build(),
+                spectrum
+            )
+        }
+        player = ExoPlayer.Builder(this, renderers)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -72,6 +105,7 @@ class PlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .setMaxSeekToPreviousPositionMs(1_000L)
             .build()
+        PlaybackSpectrum.onVisibilityChanged = { handler.post { updateSpectrumLoop() } }
 
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -144,11 +178,14 @@ class PlaybackService : MediaSessionService() {
 
         player.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                spectrum.reset()
                 recoverFromTrackError()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                updateSpectrumLoop()
                 if (isPlaying) {
+                    sleepFinished = false
                     cancelPendingRecovery()
                     player.currentMediaItem?.mediaId?.let { unavailableIds.remove(it) }
                     recoveryMessage = if (unavailableIds.isEmpty()) "" else
@@ -220,8 +257,15 @@ class PlaybackService : MediaSessionService() {
         })
     }
 
+    private fun updateSpectrumLoop() {
+        handler.removeCallbacks(spectrumTick)
+        if (PlaybackSpectrum.visible && player.isPlaying) handler.post(spectrumTick)
+        else PlaybackSpectrum.publish(SpectrumFrame.silence())
+    }
+
     private fun setSleepTimer(minutes: Int) {
         handler.removeCallbacks(sleepTick)
+        sleepFinished = false
         restoreVolume()
         sleepDeadline = if (minutes > 0) SystemClock.elapsedRealtime() + minutes * 60_000L else 0L
         sleepAtTrackEnd = minutes == SleepTimer.AT_TRACK_END
@@ -237,6 +281,8 @@ class PlaybackService : MediaSessionService() {
         // Pause before restoring gain, so expiry never produces a full-volume burst.
         player.pause()
         setSleepTimer(SleepTimer.CANCEL)
+        sleepFinished = true
+        publishSleepState()
         persistPlayback()
     }
 
@@ -272,6 +318,12 @@ class PlaybackService : MediaSessionService() {
         session?.setSessionExtras(Bundle().apply {
             putLong(SleepTimer.DEADLINE, sleepDeadline)
             putBoolean(SleepTimer.END_OF_TRACK, sleepAtTrackEnd)
+            val originalVolume = volumeBeforeFade
+            val fadeProgress = if (originalVolume != null && originalVolume > 0f) {
+                1f - (player.volume / originalVolume).coerceIn(0f, 1f)
+            } else 0f
+            putFloat(SleepTimer.FADE_PROGRESS, fadeProgress)
+            putBoolean(SleepTimer.FINISHED, sleepFinished)
             putStringArrayList(PlaybackRecovery.UNAVAILABLE_IDS, ArrayList(unavailableIds))
             putString(PlaybackRecovery.MESSAGE, recoveryMessage)
             putBoolean(PlaybackRecovery.PENDING, pendingRecovery != null)
@@ -371,10 +423,12 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         persistPlayback()
+        PlaybackSpectrum.onVisibilityChanged = null
         handler.removeCallbacksAndMessages(null)
         session?.release()
         session = null
         player.release()
+        spectrum.close()
         super.onDestroy()
     }
 }

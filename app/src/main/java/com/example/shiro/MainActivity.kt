@@ -34,6 +34,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -110,6 +111,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -351,6 +353,8 @@ fun ColorSpectrumBar(
 fun ShiroScreen(exoPlayer: MediaController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
 
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
 
@@ -369,6 +373,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
     val tracks = remember { mutableStateListOf<Track>().apply { addAll(cachedTracks) } }
     val inputFolders = remember { mutableStateListOf<FolderItem>() }
     var currentTrackIndex by remember { mutableIntStateOf(initialIndex) }
+    val artwork = rememberTrackArtwork(tracks.getOrNull(currentTrackIndex)?.uri)
     var isPlaying by remember { mutableStateOf(exoPlayer.isPlaying) }
     var showPause by remember { mutableStateOf(exoPlayer.wantsPlayback()) }
     var isBuffering by remember { mutableStateOf(exoPlayer.playbackState == Player.STATE_BUFFERING) }
@@ -388,7 +393,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
     var isBlinking by remember { mutableStateOf(false) }
     var isSleepy by remember(exoPlayer) {
         mutableStateOf(exoPlayer.sessionExtras.getLong(SleepTimer.DEADLINE) > 0L ||
-            exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK))
+            exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK) ||
+            exoPlayer.sessionExtras.getBoolean(SleepTimer.FINISHED))
     }
     var squishDirection by remember { mutableStateOf(SquishDirection.CENTER) }
 
@@ -413,14 +419,10 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
     var isRestored by remember { mutableStateOf(false) }
 
-    val isAutoSquishing = isPlaying && danceMode == DanceMode.SQUISH
     val isAutoSwaying = isPlaying && danceMode == DanceMode.SWAY
-
-    val squishDurationSec = (0.3f - (bpm - 60f) * (0.2f / 120f)).coerceIn(0.1f, 0.3f)
 
     val squishProgress = remember { Animatable(0f) }
     val swaySkew = remember { Animatable(0f) }
-    val shiroOffsetX = remember { Animatable(0f) }
     var squishJob by remember { mutableStateOf<Job?>(null) }
 
     fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
@@ -458,9 +460,11 @@ fun ShiroScreen(exoPlayer: MediaController) {
         }
     }
 
-    LaunchedEffect(isPlaying, activeHitData, currentTrackIndex) {
+    LaunchedEffect(isPlaying, activeHitData, currentTrackIndex, currentScreen, pagerState.currentPage) {
         val hitData = activeHitData
-        if (isPlaying && hitData != null) {
+        if (isPlaying && hitData != null &&
+            (currentScreen == Screen.CUSTOMIZE || pagerState.currentPage == 0)) {
+          lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
             val debounceMs = ((60000f / hitData.estimatedBpm) / 4f).toLong().coerceIn(50L, 250L)
 
@@ -487,6 +491,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
                 delay(20L)
             }
+          }
         }
     }
     val permissionToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -653,7 +658,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner, isPlaying) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (!isPlaying) {
@@ -710,7 +714,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 unavailableIds = exoPlayer.sessionExtras.getStringArrayList(PlaybackRecovery.UNAVAILABLE_IDS).orEmpty().toSet()
                 recoveryMessage = exoPlayer.sessionExtras.getString(PlaybackRecovery.MESSAGE).orEmpty()
                 isSleepy = exoPlayer.sessionExtras.getLong(SleepTimer.DEADLINE) > 0L ||
-                    exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK)
+                    exoPlayer.sessionExtras.getBoolean(SleepTimer.END_OF_TRACK) ||
+                    exoPlayer.sessionExtras.getBoolean(SleepTimer.FINISHED)
                 delay(250L)
             }
         }
@@ -746,8 +751,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
 
 
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
-
     if (currentScreen == Screen.CUSTOMIZE) {
         CustomizeScreen(
             onBack = { currentScreen = Screen.MAIN },
@@ -774,18 +777,27 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 if (page == 0) {
+                  BoxWithConstraints(Modifier.fillMaxSize()) {
+                    // Short/landscape windows scroll instead of collapsing the cat to zero height.
+                    val extraTextHeight = 160.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
+                    val pageHeight = maxOf(maxHeight, 780.dp + extraTextHeight + if (artwork != null) 176.dp else 0.dp)
                     Column(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(LightBlue)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .height(pageHeight)
+                            .background(Brush.verticalGradient(listOf(
+                                Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
+                            )))
                             .navigationBarsPadding()
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                            .padding(vertical = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
                                 .statusBarsPadding(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -800,7 +812,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 )
                             }
                             Spacer(Modifier.weight(1f))
-                            SleepTimerControl(exoPlayer)
                         }
 
                         Box(
@@ -809,47 +820,37 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 .fillMaxWidth(),
                             contentAlignment = Alignment.Center
                         ) {
-                            ShiroCharacter(
+                            ConnectedShiroStage(
+                                controller = exoPlayer,
+                                visible = currentScreen == Screen.MAIN && pagerState.currentPage == 0 &&
+                                    !isMenuOpen && !isInputsPopupOpen,
+                                isPlaying = isPlaying,
                                 isBlinking = isBlinking,
                                 isSleepy = isSleepy,
-                                squishProgress = squishProgress.value,
-                                squishDirection = squishDirection,
-                                isAutoSwaying = isAutoSwaying,
-                                swaySkew = swaySkew.value,
                                 leftEyeColor = leftEyeColor,
                                 rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
-                                onTap = {
-                                    if (!isAutoSquishing && !isAutoSwaying) {
-                                        triggerSquish(SquishDirection.CENTER)
-                                    }
-                                },
-                                eyeScale = 0.6f,
-                                eyeOffsetX = 5.dp,
-                                eyeOffsetY = 0.dp,
-                                modifier = Modifier
-                                    .fillMaxWidth(0.85f)
-                                    .aspectRatio(1536f / 1024f)
-                                    .offset(x = shiroOffsetX.value.dp)
+                                artwork = artwork,
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
 
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             val hasTracks = tracks.isNotEmpty()
                             val activeIndex = if (hasTracks) currentTrackIndex.coerceIn(0, tracks.size - 1) else -1
 
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color.White.copy(alpha = 0.7f),
+                                shape = RectangleShape,
+                                color = Color(0xFFF8FCFF),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(12.dp),
+                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -917,7 +918,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 Text(recoveryMessage, color = AccentColor, fontSize = 12.sp,
                                     maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                             }
-                            Column(modifier = Modifier.fillMaxWidth(0.95f)) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
                                 Slider(
                                     value = playbackPosition.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),
                                     onValueChange = {
@@ -950,14 +951,15 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
                             Row(
                                 modifier = Modifier
-                                    .fillMaxWidth(0.95f)
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(
+                                StageControlButton(
                                     onClick = { exoPlayer.shuffleModeEnabled = !exoPlayer.shuffleModeEnabled },
-                                    enabled = tracks.isNotEmpty()
+                                    enabled = tracks.isNotEmpty(),
+                                    selected = isShuffleOn
                                 ) {
                                     Icon(
                                         painter = painterResource(id = R.drawable.ic_shuffle),
@@ -973,7 +975,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     )
                                 }
 
-                                IconButton(
+                                StageControlButton(
                                     onClick = {
                                         if (tracks.isNotEmpty()) {
                                             val currentPos = exoPlayer.currentPosition
@@ -997,7 +999,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     )
                                 }
 
-                                Button(
+                                StagePlayButton(
                                     onClick = {
                                         if (tracks.isNotEmpty()) {
                                             if (exoPlayer.wantsPlayback()) {
@@ -1010,13 +1012,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                             }
                                         }
                                     },
-                                    enabled = tracks.isNotEmpty(),
-                                    shape = CircleShape,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = AccentColor,
-                                        disabledContainerColor = AccentColor.copy(alpha = 0.4f)
-                                    ),
-                                    modifier = Modifier.size(60.dp)
+                                    enabled = tracks.isNotEmpty()
                                 ) {
                                     Icon(
                                         painter = painterResource(id = if (showPause) R.drawable.ic_pause else R.drawable.ic_play),
@@ -1026,7 +1022,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     )
                                 }
 
-                                IconButton(
+                                StageControlButton(
                                     onClick = {
                                         if (tracks.isNotEmpty()) {
                                             exoPlayer.seekToNextMediaItem()
@@ -1044,13 +1040,14 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     )
                                 }
 
-                                IconButton(
+                                StageControlButton(
                                     onClick = {
                                         exoPlayer.repeatMode = if (exoPlayer.repeatMode == Player.REPEAT_MODE_ONE) {
                                             Player.REPEAT_MODE_ALL
                                         } else Player.REPEAT_MODE_ONE
                                     },
-                                    enabled = tracks.isNotEmpty()
+                                    enabled = tracks.isNotEmpty(),
+                                    selected = isRepeatOneOn
                                 ) {
                                     Icon(
                                         painter = painterResource(id = R.drawable.ic_repeat_one),
@@ -1068,6 +1065,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             }
                         }
                     }
+                  }
                 } else {
                     PlaylistScreen(
                         tracks = tracks,
@@ -1113,6 +1111,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                         modifier = Modifier
                             .fillMaxSize()
                             .statusBarsPadding()
+                            .verticalScroll(rememberScrollState())
                             .padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -1125,6 +1124,15 @@ fun ShiroScreen(exoPlayer: MediaController) {
                         )
 
                         HorizontalDivider(color = Color(0xFFBAE6FD))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            SleepTimerControl(exoPlayer, Modifier.fillMaxWidth())
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -2192,7 +2200,7 @@ fun ShiroCharacter(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    val showClosedEyes = isBlinking || isPressed || (squishProgress > 0.1f) || (isAutoSwaying && !isSleepy)
+    val showClosedEyes = isBlinking || isPressed || (squishProgress > 0.1f)
     val sleepyEyeScale by animateFloatAsState(
         targetValue = if (isSleepy) 0.45f else 1f,
         animationSpec = tween(durationMillis = 600),

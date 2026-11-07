@@ -9,6 +9,8 @@ object SleepTimer {
     const val MINUTES = "minutes"
     const val DEADLINE = "sleep_deadline_elapsed_ms"
     const val END_OF_TRACK = "sleep_end_of_track"
+    const val FADE_PROGRESS = "sleep_fade_progress"
+    const val FINISHED = "sleep_finished"
     const val CANCEL = 0
     const val AT_TRACK_END = -1
     const val EXTEND_FIVE = -2
