@@ -6,7 +6,6 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -424,62 +423,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
     val swaySkew = remember { Animatable(0f) }
 
-    var activeHitData by remember { mutableStateOf<TrackHitData?>(null) }
 
-    LaunchedEffect(tracks.toList()) {
-        if (tracks.isNotEmpty()) {
-            TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
-        }
-    }
-
-    LaunchedEffect(currentTrackIndex, tracks.size) {
-        if (currentTrackIndex in tracks.indices) {
-            val track = tracks[currentTrackIndex]
-            if (TrackAudioAnalyzer.hasCache(context, track.fileName)) {
-                activeHitData = TrackAudioAnalyzer.loadCachedHitData(context, track.fileName)
-            } else {
-                activeHitData = null
-                val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
-                activeHitData = data
-            }
-        } else {
-            activeHitData = null
-        }
-    }
-
-    LaunchedEffect(isPlaying, activeHitData, currentTrackIndex, currentScreen, pagerState.currentPage) {
-        val hitData = activeHitData
-        if (isPlaying && hitData != null &&
-            (currentScreen == Screen.CUSTOMIZE || pagerState.currentPage == 0)) {
-          lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-            val debounceMs = ((60000f / hitData.estimatedBpm) / 4f).toLong().coerceIn(50L, 250L)
-
-            var lastKickTime = -debounceMs
-            var kickIdx = hitData.kicksMs.indexOfFirst { it >= lastPos }.let { if (it == -1) hitData.kicksMs.size else it }
-
-            while (isActive && isPlaying) {
-                val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-
-                if (curPos < lastPos - 300L) {
-                    kickIdx = hitData.kicksMs.indexOfFirst { it >= curPos }.let { if (it == -1) hitData.kicksMs.size else it }
-                    lastKickTime = -debounceMs
-                }
-                lastPos = curPos
-
-                while (kickIdx < hitData.kicksMs.size && curPos >= hitData.kicksMs[kickIdx]) {
-                    val kickTime = hitData.kicksMs[kickIdx]
-                    if (kickTime - lastKickTime >= debounceMs) {
-                        lastKickTime = kickTime
-                    }
-                    kickIdx++
-                }
-
-                delay(20L)
-            }
-          }
-        }
-    }
     val permissionToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
         android.Manifest.permission.READ_MEDIA_AUDIO
     } else {
@@ -828,12 +772,16 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             Surface(
                                 shape = RectangleShape,
                                 color = Color(0xFFF8FCFF),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(112.dp)
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 20.dp, vertical = 12.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    verticalArrangement = Arrangement.Center
                                 ) {
                                     val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1179,37 +1127,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             )
                         }
 
-                        HorizontalDivider(color = Color(0xFFBAE6FD))
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.White,
-                            shadowElevation = 2.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    isMenuOpen = false
-                                    TrackAudioAnalyzer.clearAllCache(context)
-                                    activeHitData = null
-                                    Toast.makeText(context, "Map cache deleted. Re-analyzing playlist...", Toast.LENGTH_SHORT).show()
-                                    TrackAnalysisWorker.processPlaylistInBackground(context, tracks)
-                                    if (currentTrackIndex in tracks.indices) {
-                                        val track = tracks[currentTrackIndex]
-                                        scope.launch {
-                                            val data = TrackAudioAnalyzer.analyzeTrack(context, track.uri, track.fileName)
-                                            activeHitData = data
-                                        }
-                                    }
-                                }
-                        ) {
-                            Text(
-                                text = "Delete Map Cache",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFEF4444),
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
                     }
                 }
             }
@@ -1817,16 +1734,6 @@ fun PlaylistScreen(
                                 FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
                                     onToggleFavorite(track)
                                 }
-
-                                val isCached = TrackAudioAnalyzer.hasCache(context, track.fileName)
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(
-                                            color = if (isCached) Color(0xFF22C55E) else Color(0xFFEF4444),
-                                            shape = CircleShape
-                                        )
-                                )
                             }
                         }
 

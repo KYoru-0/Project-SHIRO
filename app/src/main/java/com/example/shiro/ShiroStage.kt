@@ -46,10 +46,14 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.sin
+import kotlin.random.Random
 
 private val catPositions = floatArrayOf(0.12f, 0.31f, 0.50f, 0.69f, 0.88f)
 private data class CatPose(val x: Float = 0f, val height: Float = 0f, val rotation: Float = 0f, val compression: Float = 0f, val foot: Float = 0f, val bend: Float = 0f, val contact: WaveContact? = null)
@@ -96,6 +100,27 @@ fun ShiroStage(
         }
         val poses = remember(bodies) { bodies.map { mutableStateOf(CatPose(it.x, it.height)) } }
         val outlines = remember(bodies, sprites) { bodies.map { outline(it) }.toMutableList() }
+        // Per-cat blink states: driven by auto-blink timer and impact detection.
+        val blinkStates = remember(bodies) { bodies.map { mutableStateOf(false) } }
+        val scope = rememberCoroutineScope()
+        // Auto-blink: each cat blinks independently every 3–7 s.
+        LaunchedEffect(bodies) {
+            bodies.indices.forEach { index ->
+                launch {
+                    delay((500L..2000L).random()) // stagger initial blinks
+                    while (isActive) {
+                        delay((3_000L..7_000L).random())
+                        if (!blinkStates[index].value) {
+                            blinkStates[index].value = true
+                            delay(120L)
+                            blinkStates[index].value = false
+                        }
+                    }
+                }
+            }
+        }
+        // Track previous contact per cat to detect landing impacts.
+        val prevContacts = remember(bodies) { arrayOfNulls<WaveContact>(bodies.size) }
         var tapVersion by remember { mutableIntStateOf(0) }
         fun nudge(index: Int) {
             val body = bodies[index]
@@ -114,7 +139,7 @@ fun ShiroStage(
                 val steps = ceil(dt * 120f).toInt().coerceIn(1, 4)
                 repeat(steps) {
                     bodies.forEachIndexed { index, body ->
-                        val shape = outline(body)
+                        val shape = outlines[index]
                         val center = body.x / widthDp
                         val spread = radius / widthDp
                         val surface = waveHeightAt(bands, center) * amplitude
@@ -125,19 +150,24 @@ fun ShiroStage(
                             catHeight.value, bands, widthDp, amplitude)
                         body.step(wave.centerHeight - shape.support, slope, dt / steps, shape.support, surface, contact)
                         outlines[index] = outline(body)
+                        body.contain(widthDp, ceiling, outlines[index])
                     }
                     resolveCatContacts(bodies, outlines)
-                    // Wall reflection can change the bend; recheck the reflected outline as well.
-                    repeat(2) {
-                        bodies.forEachIndexed { index, body ->
-                            outlines[index] = outline(body)
-                            body.contain(widthDp, ceiling, outlines[index])
-                        }
-                    }
                 }
                 bodies.forEachIndexed { index, body ->
                     poses[index].value = CatPose(body.x, body.height, body.rotation, body.compression,
                         body.height - outlines[index].support, bend(body), body.contact)
+                    // Blink on impact: trigger when contact newly appears.
+                    val hadContact = prevContacts[index] != null
+                    val hasContact = body.contact != null
+                    if (hasContact && !hadContact && !blinkStates[index].value) {
+                        scope.launch {
+                            blinkStates[index].value = true
+                            delay(120L)
+                            blinkStates[index].value = false
+                        }
+                    }
+                    prevContacts[index] = body.contact
                 }
                 // After pause descent and landing finish, no idle physics loop is needed.
                 if (!isPlaying && bands.all { it < 0.001f } &&
@@ -156,7 +186,7 @@ fun ShiroStage(
         bodies.forEachIndexed { index, body ->
             WaveCat(
                 pose = poses[index],
-                isBlinking = isBlinking, isSleepy = isSleepy,
+                isBlinking = isBlinking || blinkStates[index].value, isSleepy = isSleepy,
                 sprites = sprites,
                 night = night,
                 onNudge = { nudge(index) },
