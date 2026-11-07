@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
+  <title>Shiro body without tail</title>
+  <desc>White rounded cat body with two ears and a dark outline. Transparent background; no tail or facial features.</desc>
+  <path fill="#FBF9F6" stroke="#292327" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"
+    d="M 470 410
+       C 476 325 521 185 571 156
+       C 601 129 631 157 658 179
+       C 683 200 710 237 728 270
+       C 771 259 822 259 864 270
+       C 901 219 956 155 995 151
+       C 1051 129 1102 319 1122 410
+       C 1188 504 1246 650 1228 783
+       C 1219 897 1164 931 1007 937
+       C 843 951 647 950 509 928
+       C 404 913 365 863 359 781
+       C 348 663 399 515 470 410 Z" />
+</svg>
