@@ -1,8 +1,7 @@
 package com.example.shiro
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.size
@@ -18,22 +17,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 
-/** A raised control with the same hit area and accessibility behavior as IconButton. */
+/** Glass control with the same hit area and accessibility behavior as IconButton. */
 @Composable
 fun StageControlButton(
     onClick: () -> Unit,
     enabled: Boolean,
+    colors: PlayerColors,
     selected: Boolean? = null,
     content: @Composable () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, tween(100), label = "Control press")
     IconButton(
         onClick = onClick,
         enabled = enabled,
@@ -41,27 +40,16 @@ fun StageControlButton(
         modifier = Modifier
             .size(48.dp)
             .semantics { if (selected != null) this.selected = selected }
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationY = if (pressed) 1.dp.toPx() else 0f
-            }
-            .shadow(if (pressed || !enabled) 1.dp else 4.dp, CircleShape,
-                ambientColor = Color(0xFF5488AA), spotColor = Color(0xFF5488AA))
-            .background(
-                Brush.verticalGradient(
-                    if (selected == true && enabled) listOf(Color(0xFFF5FCFF), Color(0xFFB9E7FA))
-                    else listOf(Color(0xFFFEFFFF), Color(0xFFE2EFF7))
-                ), CircleShape
-            )
+            .glassPressFeedback(interactionSource, enabled, CircleShape)
+            .glassPanel(colors, CircleShape, selected = selected == true && enabled,
+                elevation = if (pressed || !enabled) 0.dp else 2.dp)
     ) { content() }
 }
 
 @Composable
-fun StagePlayButton(onClick: () -> Unit, enabled: Boolean, content: @Composable () -> Unit) {
+fun StagePlayButton(onClick: () -> Unit, enabled: Boolean, colors: PlayerColors, content: @Composable () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, tween(100), label = "Play press")
     Button(
         onClick = onClick,
         enabled = enabled,
@@ -69,10 +57,17 @@ fun StagePlayButton(onClick: () -> Unit, enabled: Boolean, content: @Composable 
         shape = CircleShape,
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = AccentColor,
-            disabledContainerColor = AccentColor.copy(alpha = 0.4f)
+            containerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            contentColor = Color.White
         ),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp, pressedElevation = 2.dp),
-        modifier = Modifier.size(60.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
+        modifier = Modifier.size(60.dp).glassPressFeedback(interactionSource, enabled, CircleShape)
+            .shadow(if (pressed || !enabled) 2.dp else 6.dp, CircleShape,
+                ambientColor = colors.text.copy(alpha = 0.2f), spotColor = colors.text.copy(alpha = 0.2f))
+            .background(Brush.linearGradient(listOf(colors.accent, lerp(colors.accent, Color.Black, 0.16f))
+                .map { it.copy(alpha = if (enabled) 1f else 0.4f) }), CircleShape)
+            .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape)
+            .glassButtonFinish(CircleShape)
     ) { content() }
 }

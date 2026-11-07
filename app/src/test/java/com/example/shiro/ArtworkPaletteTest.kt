@@ -7,17 +7,15 @@ import org.junit.Test
 class ArtworkPaletteTest {
     @Test fun solidCoverGetsLighterAndDarkerShades() {
         val palette = artworkPalette(IntArray(100) { 0xFF408080.toInt() })
-        assertEquals(0xFF408080.toInt(), palette[1])
+        assertTrue((palette[1] ushr 8 and 255) > (palette[1] ushr 16 and 255))
         assertTrue((palette[0] and 255) > (palette[1] and 255))
         assertTrue((palette[2] and 255) < (palette[1] and 255))
     }
 
-    @Test fun dominantDistinctColorsSurviveWithoutBecomingAnAverage() {
+    @Test fun dominantAccentProducesOneCoherentHue() {
         val pixels = IntArray(100) { if (it < 70) 0xFFFF0000.toInt() else 0xFF0000FF.toInt() }
         val palette = artworkPalette(pixels)
-        assertEquals(0xFFFF0000.toInt(), palette.first())
-        assertEquals(0xFF0000FF.toInt(), palette.last())
-        assertEquals(0xFF7F007F.toInt(), palette[1])
+        assertTrue(palette.all { (it ushr 16 and 255) > (it and 255) })
     }
 
     @Test fun transparentPixelsDoNotPolluteColorsAndEmptyArtFallsBackToBlue() {
@@ -32,5 +30,15 @@ class ArtworkPaletteTest {
             color ushr 24 == 255 && (color ushr 16 and 255) == (color ushr 8 and 255) &&
                 (color ushr 8 and 255) == (color and 255)
         })
+        assertTrue(palette.all { (it and 255) >= 100 })
+    }
+
+    @Test fun blackAndWhiteCoverKeepsItsSmallGoldAccentWithoutBlackFloor() {
+        val pixels = IntArray(100) { if (it < 85) 0xFF000000.toInt() else if (it < 95) -1 else 0xFFE9D966.toInt() }
+        val palette = artworkPalette(pixels)
+        assertTrue(palette.all { color ->
+            (color ushr 16 and 255) > (color and 255) && (color ushr 8 and 255) > (color and 255)
+        })
+        assertTrue((palette.last() ushr 8 and 255) > 100)
     }
 }
