@@ -3,6 +3,7 @@ package com.example.shiro
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -72,6 +73,15 @@ fun ShiroStage(
     val displayed = rememberSmoothSpectrum(spectrum, isPlaying, isVisible)
     val sprites = rememberJellySprites(leftEyeColor, rightEyeColor)
     BoxWithConstraints(modifier.clipToBounds()) {
+        artwork?.let {
+            Image(
+                bitmap = it.image,
+                contentDescription = "Album cover background",
+                contentScale = ContentScale.Crop,
+                alpha = 0.35f,
+                modifier = Modifier.matchParentSize()
+            )
+        }
         val waveHeight = if (maxHeight < 300.dp) 160.dp else 220.dp
         val catWidth = minOf(maxWidth * 0.16f, 78.dp)
         val catHeight = catWidth / 1.5f
@@ -138,10 +148,6 @@ fun ShiroStage(
         Canvas(Modifier.matchParentSize()) {
             drawRect(Brush.verticalGradient(listOf(Color.Transparent,
                 Color(0xFF47618A).copy(alpha = night * 0.24f), Color.Transparent)))
-        }
-        artwork?.let {
-            Image(it.image, contentDescription = "Album cover", contentScale = ContentScale.Crop,
-                alpha = 0.5f, modifier = Modifier.align(Alignment.TopCenter).size(minOf(160.dp, maxWidth)))
         }
         SpectrumWave(
             displayed, poses, night, isPlaying, artwork?.colors,
@@ -232,15 +238,15 @@ private fun SpectrumWave(
     val middle by animateColorAsState(palette[1], tween(600), label = "Wave middle color")
     val bottom by animateColorAsState(palette[2], tween(600), label = "Wave bottom color")
     Canvas(modifier.semantics {
-        contentDescription = if (isPlaying) "Five cats riding the music spectrum, bass to treble" else "Five cats resting on the paused spectrum"
+        contentDescription = if (isPlaying) "Three cats riding the music spectrum, bass to treble" else "Three cats resting on the paused spectrum"
     }) {
         if (size.width <= 0f || size.height <= 0f) return@Canvas
         val amplitude = (size.height - 2.dp.toPx()).coerceAtLeast(0f) * (1f - night * 0.22f)
         val bands = displayed.value
         val path = Path()
         // Sampling the smooth curve also lets each cat make a small local dent in it.
-        for (point in 0..160) {
-            val fraction = point / 160f
+        for (point in 0..320) {
+            val fraction = point / 320f
             var height = waveHeightAt(bands, fraction) * amplitude
             poses.forEach { poseState ->
                 val pose = poseState.value

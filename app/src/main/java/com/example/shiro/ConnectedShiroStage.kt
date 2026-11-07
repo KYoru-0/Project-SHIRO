@@ -34,7 +34,7 @@ fun ConnectedShiroStage(
     modifier: Modifier = Modifier
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    var frame by remember { mutableStateOf(SpectrumFrame(FloatArray(24), 0f)) }
+    var frame by remember { mutableStateOf(SpectrumFrame(FloatArray(SpectrumFrame.BAND_COUNT), 0f)) }
     var sleepTarget by remember { mutableFloatStateOf(0f) }
     var foreground by remember { mutableStateOf(false) }
 

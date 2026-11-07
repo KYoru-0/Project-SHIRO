@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLong
 /** Immutable snapshots: consumers must not modify [bands]. Levels are normalized to 0..1. */
 data class SpectrumFrame(val bands: FloatArray, val bassEnergy: Float) {
     companion object {
-        const val BAND_COUNT = 24
+        const val BAND_COUNT = 16
         fun silence() = SpectrumFrame(FloatArray(BAND_COUNT), 0f)
     }
 }

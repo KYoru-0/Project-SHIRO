@@ -110,6 +110,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -421,21 +422,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
     val isAutoSwaying = isPlaying && danceMode == DanceMode.SWAY
 
-    val squishProgress = remember { Animatable(0f) }
     val swaySkew = remember { Animatable(0f) }
-    var squishJob by remember { mutableStateOf<Job?>(null) }
-
-    fun triggerSquish(direction: SquishDirection = SquishDirection.CENTER) {
-        squishJob?.cancel()
-        squishJob = scope.launch {
-            if (squishProgress.value > 0.01f) {
-                squishProgress.animateTo(0f, tween(40, easing = FastOutSlowInEasing))
-            }
-            squishDirection = direction
-            squishProgress.animateTo(1f, tween(70, easing = FastOutSlowInEasing))
-            squishProgress.animateTo(0f, tween(110, easing = FastOutSlowInEasing))
-        }
-    }
 
     var activeHitData by remember { mutableStateOf<TrackHitData?>(null) }
 
@@ -484,7 +471,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                     val kickTime = hitData.kicksMs[kickIdx]
                     if (kickTime - lastKickTime >= debounceMs) {
                         lastKickTime = kickTime
-                        triggerSquish(SquishDirection.CENTER)
                     }
                     kickIdx++
                 }
@@ -617,11 +603,13 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 if (parts.size == 2) {
                     val uri = Uri.parse(parts[0])
                     try {
-                        context.contentResolver.takePersistableUriPermission(
-                            uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                    } catch (_: Exception) {}
+                        val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+                    } catch (_: Exception) {
+                        try {
+                            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (_: Exception) {}
+                    }
                     FolderItem(uri = uri, name = parts[1])
                 } else null
             }
@@ -738,11 +726,13 @@ fun ShiroScreen(exoPlayer: MediaController) {
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {}
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (_: Exception) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {}
+            }
             addFolderUri(uri)
         }
     }
@@ -762,13 +752,11 @@ fun ShiroScreen(exoPlayer: MediaController) {
             onRightEyeColorChange = { rightEyeColor = it },
             isBlinking = isBlinking,
             isSleepy = isSleepy,
-            squishProgress = squishProgress.value,
+            squishProgress = 0f,
             squishDirection = squishDirection,
             isAutoSwaying = isAutoSwaying,
             swaySkew = 0f,
-            onCharacterTap = {
-                triggerSquish(SquishDirection.CENTER)
-            }
+            onCharacterTap = {}
         )
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -777,15 +765,10 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 if (page == 0) {
-                  BoxWithConstraints(Modifier.fillMaxSize()) {
-                    // Short/landscape windows scroll instead of collapsing the cat to zero height.
-                    val extraTextHeight = 160.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
-                    val pageHeight = maxOf(maxHeight, 780.dp + extraTextHeight + if (artwork != null) 176.dp else 0.dp)
+                  Box(Modifier.fillMaxSize()) {
                     Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .height(pageHeight)
+                            .fillMaxSize()
                             .background(Brush.verticalGradient(listOf(
                                 Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
                             )))
@@ -1995,7 +1978,7 @@ fun CustomizeScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(240.dp),
+                .height(480.dp),
             contentAlignment = Alignment.Center
         ) {
             ShiroCharacter(
@@ -2012,7 +1995,7 @@ fun CustomizeScreen(
                 eyeOffsetX = 5.dp,
                 eyeOffsetY = 0.dp,
                 modifier = Modifier
-                    .fillMaxWidth(0.85f)
+                    .fillMaxWidth(1.0f)
                     .aspectRatio(1536f / 1024f)
             )
         }

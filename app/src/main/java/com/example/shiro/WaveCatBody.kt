@@ -29,17 +29,17 @@ internal class WaveCatBody(var x: Float) {
         if (grounded) velocityX -= slope.coerceIn(-2f, 2f) * 450f * dt
         velocityX *= exp(-(if (grounded) 1.2f else 0.18f) * dt)
         velocityX = velocityX.coerceIn(-180f, 180f)
-        velocityY -= 720f * dt
+        velocityY -= 980f * dt
         x += velocityX * dt
         height += velocityY * dt
-        jellyVelocity += (-60f * compression - 5.4f * jellyVelocity) * dt
-        compression = (compression + jellyVelocity * dt).coerceIn(-0.75f, 1.20f)
+        jellyVelocity += (-70f * compression - 5.8f * jellyVelocity) * dt
+        compression = (compression + jellyVelocity * dt).coerceIn(-0.45f, 0.70f)
         if (height <= floor) {
             val impact = (floorSpeed - velocityY).coerceAtLeast(0f)
             height = floor
-            velocityY = if (impact > 70f) (floorSpeed.coerceAtLeast(0f) * 0.5f + impact * 0.48f).coerceAtMost(260f) else 0f
-            if (impact > 70f) {
-                wobble(impact / 450f)
+            velocityY = if (impact > 80f) (floorSpeed.coerceAtLeast(0f) * 0.5f + impact * 0.48f).coerceAtMost(260f) else 0f
+            if (impact > 80f) {
+                wobble(impact / 600f)
                 contact = waveContact
             }
             spin += (velocityX / radius.coerceAtLeast(1f) * 57.3f - spin) * (dt * 12f).coerceAtMost(1f)
@@ -66,7 +66,7 @@ internal class WaveCatBody(var x: Float) {
 
     fun wobble(strength: Float) {
         contact = null
-        jellyVelocity = (jellyVelocity + strength.coerceIn(0f, 1f) * 9.5f).coerceAtMost(14.5f)
+        jellyVelocity = (jellyVelocity + strength.coerceIn(0f, 1f) * 4f).coerceAtMost(8f)
     }
 
     fun isSettled(radius: Float) = height <= radius + 0.1f && abs(velocityX) < 0.5f &&
