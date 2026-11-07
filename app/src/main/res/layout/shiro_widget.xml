@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:gravity="center_vertical"
+    android:padding="12dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:gravity="center_vertical" android:orientation="horizontal">
+        <ImageView android:id="@+id/widget_artwork"
+            android:layout_width="72dp" android:layout_height="72dp"
+            android:background="@drawable/widget_art_frame" android:clipToOutline="true"
+            tools:targetApi="31"
+            android:src="@mipmap/ic_launcher" android:scaleType="centerCrop"
+            android:contentDescription="@string/widget_open_player" />
+        <LinearLayout android:id="@+id/widget_metadata"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginStart="12dp" android:orientation="vertical">
+            <TextView android:id="@+id/widget_status"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="@string/widget_empty_status" android:textColor="#234B64"
+                android:textSize="11sp" android:letterSpacing="0.08" android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/widget_title"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:text="@string/app_name"
+                android:textColor="#103447" android:textSize="17sp" android:textStyle="bold"
+                android:maxLines="2" android:ellipsize="end" />
+            <TextView android:id="@+id/widget_artist"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:text="@string/widget_add_music"
+                android:textColor="#234B64" android:textSize="13sp" android:maxLines="1" android:ellipsize="end" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+        android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+        <ImageView android:id="@+id/widget_cat" android:layout_width="56dp" android:layout_height="48dp"
+            android:src="@drawable/shiro_body_neutral" android:scaleType="fitCenter"
+            android:contentDescription="@string/widget_cat_resting" />
+        <TextView android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"
+            android:importantForAccessibility="no" />
+        <ImageButton android:id="@+id/widget_previous"
+            android:layout_width="48dp" android:layout_height="48dp" android:padding="12dp"
+            android:src="@drawable/ic_prev" android:background="@drawable/widget_button"
+            android:contentDescription="@string/widget_previous" />
+        <ImageButton android:id="@+id/widget_play"
+            android:layout_width="48dp" android:layout_height="48dp" android:padding="11dp"
+            android:src="@drawable/ic_play" android:tint="#075985" android:background="@drawable/widget_button"
+            android:contentDescription="@string/widget_play" />
+        <ImageButton android:id="@+id/widget_next"
+            android:layout_width="48dp" android:layout_height="48dp" android:padding="12dp"
+            android:src="@drawable/ic_next" android:background="@drawable/widget_button"
+            android:contentDescription="@string/widget_next" />
+    </LinearLayout>
+</LinearLayout>
