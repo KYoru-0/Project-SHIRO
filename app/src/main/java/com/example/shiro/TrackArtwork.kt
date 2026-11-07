@@ -44,7 +44,7 @@ private fun loadTrackArtwork(context: Context, uri: Uri): TrackArtwork? = try {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
         options.inSampleSize = 1
-        while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 512) options.inSampleSize *= 2
+        while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 1024) options.inSampleSize *= 2
         options.inJustDecodeBounds = false
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
         bitmap?.let {

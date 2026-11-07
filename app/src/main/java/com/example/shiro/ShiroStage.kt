@@ -7,7 +7,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -37,7 +36,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -138,10 +136,6 @@ fun ShiroStage(
         Canvas(Modifier.matchParentSize()) {
             drawRect(Brush.verticalGradient(listOf(Color.Transparent,
                 Color(0xFF47618A).copy(alpha = night * 0.24f), Color.Transparent)))
-        }
-        artwork?.let {
-            Image(it.image, contentDescription = "Album cover", contentScale = ContentScale.Crop,
-                alpha = 0.5f, modifier = Modifier.align(Alignment.TopCenter).size(minOf(160.dp, maxWidth)))
         }
         SpectrumWave(
             displayed, poses, night, isPlaying, artwork?.colors,

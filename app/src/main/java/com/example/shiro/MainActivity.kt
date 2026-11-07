@@ -22,6 +22,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ScrollState
@@ -777,18 +778,26 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 if (page == 0) {
-                  BoxWithConstraints(Modifier.fillMaxSize()) {
+                  BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
+                      Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
+                  )))) {
+                    artwork?.let { cover ->
+                        Image(
+                            bitmap = cover.image,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            alpha = 0.5f,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
                     // Short/landscape windows scroll instead of collapsing the cat to zero height.
                     val extraTextHeight = 160.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
-                    val pageHeight = maxOf(maxHeight, 780.dp + extraTextHeight + if (artwork != null) 176.dp else 0.dp)
+                    val pageHeight = maxOf(maxHeight, 780.dp + extraTextHeight)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
                             .height(pageHeight)
-                            .background(Brush.verticalGradient(listOf(
-                                Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
-                            )))
                             .navigationBarsPadding()
                             .padding(vertical = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -844,7 +853,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
                             Surface(
                                 shape = RectangleShape,
-                                color = Color(0xFFF8FCFF),
+                                color = Color(0xFFF8FCFF).copy(alpha = if (artwork != null) 0.65f else 1f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
