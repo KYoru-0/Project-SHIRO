@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -29,6 +30,33 @@ import com.google.common.util.concurrent.ListenableFuture
 /** Owns playback independently of Activity/Compose lifetime, including queue and sleep. */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
+    companion object {
+        const val ACTION_FAVORITE = "com.example.shiro.ACTION_FAVORITE"
+        const val ACTION_CLOSE = "com.example.shiro.ACTION_CLOSE"
+    }
+
+    private val favoriteCommand = SessionCommand(ACTION_FAVORITE, Bundle.EMPTY)
+    private val closeCommand = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
+
+    private fun updateCustomLayout() {
+        val favoriteIds = loadFavoriteIds(this)
+        val currentUri = player.currentMediaItem?.mediaId.orEmpty()
+        val isFavorite = currentUri.isNotBlank() && currentUri in favoriteIds
+
+        val favoriteButton = CommandButton.Builder()
+            .setDisplayName(if (isFavorite) "Remove from favorites" else "Add to favorites")
+            .setIconResId(if (isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline)
+            .setSessionCommand(favoriteCommand)
+            .build()
+
+        val closeButton = CommandButton.Builder()
+            .setDisplayName("Exit Shiro")
+            .setIconResId(R.drawable.ic_close)
+            .setSessionCommand(closeCommand)
+            .build()
+
+        session?.setCustomLayout(listOf(favoriteButton, closeButton))
+    }
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -120,9 +148,29 @@ class PlaybackService : MediaSessionService() {
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
                     val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                        .add(favoriteCommand)
+                        .add(closeCommand)
                     if (controller.packageName == packageName) commands.add(SleepTimer.command)
+
+                    val favoriteIds = loadFavoriteIds(this@PlaybackService)
+                    val currentUri = player.currentMediaItem?.mediaId.orEmpty()
+                    val isFavorite = currentUri.isNotBlank() && currentUri in favoriteIds
+
+                    val favoriteButton = CommandButton.Builder()
+                        .setDisplayName(if (isFavorite) "Remove from favorites" else "Add to favorites")
+                        .setIconResId(if (isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline)
+                        .setSessionCommand(favoriteCommand)
+                        .build()
+
+                    val closeButton = CommandButton.Builder()
+                        .setDisplayName("Exit Shiro")
+                        .setIconResId(R.drawable.ic_close)
+                        .setSessionCommand(closeCommand)
+                        .build()
+
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(commands.build())
+                        .setCustomLayout(listOf(favoriteButton, closeButton))
                         .build()
                 }
 
@@ -132,6 +180,27 @@ class PlaybackService : MediaSessionService() {
                     customCommand: SessionCommand,
                     args: Bundle
                 ): ListenableFuture<SessionResult> {
+                    if (customCommand.customAction == ACTION_FAVORITE) {
+                        val currentUri = player.currentMediaItem?.mediaId.orEmpty()
+                        if (currentUri.isNotBlank()) {
+                            val favoriteIds = loadFavoriteIds(this@PlaybackService).toMutableSet()
+                            if (currentUri in favoriteIds) {
+                                favoriteIds.remove(currentUri)
+                            } else {
+                                favoriteIds.add(currentUri)
+                            }
+                            saveFavoriteIds(this@PlaybackService, favoriteIds)
+                            updateCustomLayout()
+                            publishSleepState()
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    if (customCommand.customAction == ACTION_CLOSE) {
+                        persistPlayback()
+                        player.pause()
+                        stopSelf()
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
                     val minutes = args.getInt(SleepTimer.MINUTES, Int.MIN_VALUE)
                     if (controller.packageName != packageName || customCommand.customAction != SleepTimer.ACTION ||
                         !SleepTimer.isValid(minutes) || (minutes != SleepTimer.CANCEL && player.mediaItemCount == 0)) {
@@ -177,6 +246,10 @@ class PlaybackService : MediaSessionService() {
         publishSleepState()
 
         player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                updateCustomLayout()
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 spectrum.reset()
                 recoverFromTrackError()
@@ -417,7 +490,9 @@ class PlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         persistPlayback()
-        stopSelf()
+        if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED) {
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
