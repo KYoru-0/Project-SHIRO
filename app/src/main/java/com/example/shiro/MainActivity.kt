@@ -394,8 +394,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
     var bpm by remember { mutableFloatStateOf(120f) }
 
     var isHeterochromia by remember { mutableStateOf(false) }
-    var leftEyeColor by remember { mutableStateOf(Color(0xFF201C1C)) }
-    var rightEyeColor by remember { mutableStateOf(Color(0xFF201C1C)) }
+    var leftEyeColor by remember { mutableStateOf(Color.Black) }
+    var rightEyeColor by remember { mutableStateOf(Color.Black) }
 
     var isBlinking by remember { mutableStateOf(false) }
     var isSleepy by remember(exoPlayer) {
@@ -586,8 +586,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
         }
 
         isHeterochromia = prefs.getBoolean("is_hetero", false)
-        leftEyeColor = Color(prefs.getInt("left_eye_color", Color(0xFF201C1C).toArgb()))
-        rightEyeColor = Color(prefs.getInt("right_eye_color", Color(0xFF201C1C).toArgb()))
+        leftEyeColor = Color(prefs.getInt("left_eye_color", Color.Black.toArgb()))
+        rightEyeColor = Color(prefs.getInt("right_eye_color", Color.Black.toArgb()))
         bpm = prefs.getFloat("bpm", 120f)
         val danceModeName = prefs.getString("dance_mode", DanceMode.SWAY.name) ?: DanceMode.SWAY.name
         danceMode = try { DanceMode.valueOf(danceModeName) } catch (_: Exception) { DanceMode.SWAY }
@@ -808,7 +808,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     Image(
                                         painter = painterResource(id = R.drawable.ic_shiro_foreground),
                                         contentDescription = "Shiro icon",
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(28.dp)
                                     )
                                     Text(
                                         text = "$shiroCount",
@@ -966,7 +966,9 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
                                     colors = SliderDefaults.colors(
                                         thumbColor = ButtonColor,
-                                        activeTrackColor = ButtonColor
+                                        activeTrackColor = ButtonColor,
+                                        inactiveTrackColor = Color.Transparent,
+                                        inactiveTickColor = Color.Transparent
                                     ),
                                     modifier = Modifier.height(24.dp)
                                 )
@@ -2307,8 +2309,8 @@ fun ShiroCharacter(
     isSleepy: Boolean = false,
     isAutoSwaying: Boolean = false,
     swaySkew: Float = 0f,
-    leftEyeColor: Color = Color(0xFF201C1C),
-    rightEyeColor: Color = Color(0xFF201C1C),
+    leftEyeColor: Color = Color.Black,
+    rightEyeColor: Color = Color.Black,
     onTap: () -> Unit = {},
     eyeScale: Float = 0.6f,
     eyeOffsetX: Dp = 5.dp,
