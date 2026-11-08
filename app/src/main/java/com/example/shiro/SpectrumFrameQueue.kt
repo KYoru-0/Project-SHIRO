@@ -32,7 +32,7 @@ internal class SpectrumFrameQueue(private val capacity: Int = 96) {
         return if (current != null && current.generation == generation &&
             positionUs >= current.timeUs && positionUs - current.timeUs <= 250_000L) {
             current.frame
-        } else SpectrumFrame.silence()
+        } else SpectrumFrame.unavailable()
     }
 
     @Synchronized

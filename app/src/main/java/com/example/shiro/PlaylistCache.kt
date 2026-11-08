@@ -31,6 +31,8 @@ fun savePlaylistCache(context: Context, tracks: List<Track>): Boolean = synchron
                 put("fileName", track.fileName)
                 put("artist", track.artist)
                 put("composer", track.composer)
+                track.sourceSize?.let { put("sourceSize", it) }
+                track.sourceModified?.let { put("sourceModified", it) }
             })
         }
         val bytes = array.toString().toByteArray(Charsets.UTF_8)
@@ -65,7 +67,9 @@ fun loadPlaylistCache(context: Context): List<Track> = synchronized(playlistCach
                 title = item.getString("title"),
                 fileName = item.getString("fileName"),
                 artist = item.optString("artist", ""),
-                composer = item.optString("composer", "")
+                composer = item.optString("composer", ""),
+                sourceSize = if (item.has("sourceSize")) item.getLong("sourceSize") else null,
+                sourceModified = if (item.has("sourceModified")) item.getLong("sourceModified") else null
             )
         }.filter { track -> folders.any { track.belongsToFolder(it) } }
         // A failed save must not resurrect explicitly removed folders on restart.

@@ -7,6 +7,10 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 class StageGradientTest {
+    @Test fun strongestBeatsKeepTheOverlaySubtle() {
+        assertEquals(0.24f, stageGradientOpacity(MusicBackdropFrame(energy = 1f, pulse = 1f)), 0.001f)
+        assertTrue(stageGradientOpacity(MusicBackdropFrame(energy = 2f, pulse = 2f)) <= 0.24f)
+    }
     @Test fun floorCoverageAndCircleSeamsStayIntactWithoutAllocatingVertexBuffers() {
         val sheet = GradientSheet()
         val buffer = sheet.vertices
@@ -63,7 +67,7 @@ class StageGradientTest {
                     sheets[layer].vertices.copyInto(previous[layer])
                 }
             }
-            assertTrue(opacityBeforePause > 0.5f)
+            assertTrue(opacityBeforePause in 0.1f..0.24f)
             assertTrue(motion.isSettled)
             assertEquals(0f, stageGradientOpacity(frame), 0f)
             assertEquals(0f, stageGradientOpacity(motion.advance(FloatArray(24), MusicDynamics(), true, 1f / 60)), 0f)
@@ -81,11 +85,11 @@ class StageGradientTest {
         sheet.update(loud, 0, 0f, false)
         val bassColumn = GradientSheet.COLUMNS / 4 * 2 + 1
         val trebleColumn = GradientSheet.COLUMNS * 3 / 4 * 2 + 1
-        assertTrue("Spectrum floor rises with the bass region", baseline[bassColumn] - sheet.vertices[bassColumn] > 0.3f)
+        assertTrue("Bass movement stays visible but restrained", baseline[bassColumn] - sheet.vertices[bassColumn] in 0.1f..0.2f)
         assertEquals(baseline[trebleColumn], sheet.vertices[trebleColumn], 0.001f)
         val spectrum = sheet.vertices.copyOf()
         sheet.update(loud.copy(phase = 1.3), 0, 1f, false)
-        assertTrue("Liquid makes a different, flowing shape", spectrum.indices.any { abs(spectrum[it] - sheet.vertices[it]) > 0.08f })
+        assertTrue("Liquid keeps a gentle flowing shape", spectrum.indices.any { abs(spectrum[it] - sheet.vertices[it]) > 0.03f })
         sheet.update(loud, 0, 0f, true)
         val circle = sheet.vertices.copyOf()
         sheet.update(loud.copy(rotation = (Math.PI / 2).toFloat()), 0, 0f, true)
