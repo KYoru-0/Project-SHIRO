@@ -363,6 +363,15 @@ fun ShiroScreen(exoPlayer: MediaController) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
 
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { _ -> }
+        LaunchedEffect(Unit) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     var currentScreen by remember { mutableStateOf(Screen.MAIN) }
 
     val cachedTracks = remember(exoPlayer) {
