@@ -32,19 +32,27 @@ import com.google.common.util.concurrent.ListenableFuture
 class PlaybackService : MediaSessionService() {
     companion object {
         const val ACTION_CLOSE = "com.example.shiro.ACTION_CLOSE"
+        const val ACTION_SHIRO = "com.example.shiro.ACTION_SHIRO"
     }
 
+    private val shiroCommand = SessionCommand(ACTION_SHIRO, Bundle.EMPTY)
     private val closeCommand = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
 
     private fun updateCustomLayout() {
+        val shiroButton = CommandButton.Builder()
+            .setDisplayName("Shiro")
+            .setIconResId(R.drawable.ic_shiro_foreground)
+            .setSessionCommand(shiroCommand)
+            .build()
+
         val closeButton = CommandButton.Builder()
             .setDisplayName("Exit Shiro")
             .setIconResId(R.drawable.ic_close)
             .setSessionCommand(closeCommand)
             .build()
 
-        session?.setCustomLayout(listOf(closeButton))
-        session?.setMediaButtonPreferences(listOf(closeButton))
+        session?.setCustomLayout(listOf(shiroButton, closeButton))
+        session?.setMediaButtonPreferences(listOf(shiroButton, closeButton))
     }
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
@@ -137,8 +145,15 @@ class PlaybackService : MediaSessionService() {
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
                     val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                        .add(shiroCommand)
                         .add(closeCommand)
                     if (controller.packageName == packageName) commands.add(SleepTimer.command)
+
+                    val shiroButton = CommandButton.Builder()
+                        .setDisplayName("Shiro")
+                        .setIconResId(R.drawable.ic_shiro_foreground)
+                        .setSessionCommand(shiroCommand)
+                        .build()
 
                     val closeButton = CommandButton.Builder()
                         .setDisplayName("Exit Shiro")
@@ -148,8 +163,8 @@ class PlaybackService : MediaSessionService() {
 
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(commands.build())
-                        .setCustomLayout(listOf(closeButton))
-                        .setMediaButtonPreferences(listOf(closeButton))
+                        .setCustomLayout(listOf(shiroButton, closeButton))
+                        .setMediaButtonPreferences(listOf(shiroButton, closeButton))
                         .build()
                 }
 
@@ -159,6 +174,13 @@ class PlaybackService : MediaSessionService() {
                     customCommand: SessionCommand,
                     args: Bundle
                 ): ListenableFuture<SessionResult> {
+                    if (customCommand.customAction == ACTION_SHIRO) {
+                        val launchIntent = Intent(this@PlaybackService, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        }
+                        startActivity(launchIntent)
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
                     if (customCommand.customAction == ACTION_CLOSE) {
                         persistPlayback()
                         player.pause()
