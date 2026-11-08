@@ -1810,32 +1810,30 @@ fun PlaylistScreen(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 20.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FilterChip(
                 selected = !favoritesOnly,
                 onClick = { favoritesOnly = false },
-                label = { Text("All tracks", color = Color(0xFF0C4A6E)) },
+                label = { Text("All tracks", color = if (!favoritesOnly) Color.White else Color(0xFF0369A1)) },
                 colors = FilterChipDefaults.filterChipColors(
-                    containerColor = Color(0xFFE0F2FE),
-                    selectedContainerColor = Color(0xFF38BDF8),
-                    labelColor = Color(0xFF0C4A6E),
-                    selectedLabelColor = Color(0xFF0C4A6E)
-                ),
-                border = null
+                    containerColor = Color.White,
+                    selectedContainerColor = ButtonColor,
+                    labelColor = Color(0xFF0369A1),
+                    selectedLabelColor = Color.White
+                )
             )
             FilterChip(
                 selected = favoritesOnly,
                 onClick = { favoritesOnly = true },
-                label = { Text("Favorites", color = Color(0xFF0C4A6E)) },
+                label = { Text("Favorites", color = if (favoritesOnly) Color.White else Color(0xFF0369A1)) },
                 colors = FilterChipDefaults.filterChipColors(
-                    containerColor = Color(0xFFE0F2FE),
-                    selectedContainerColor = Color(0xFF38BDF8),
-                    labelColor = Color(0xFF0C4A6E),
-                    selectedLabelColor = Color(0xFF0C4A6E)
-                ),
-                border = null
+                    containerColor = Color.White,
+                    selectedContainerColor = ButtonColor,
+                    labelColor = Color(0xFF0369A1),
+                    selectedLabelColor = Color.White
+                )
             )
         }
         HorizontalDivider(color = Color(0xFFBAE6FD), thickness = 1.dp)
@@ -1961,8 +1959,22 @@ fun PlaylistScreen(
                                         Text("Unavailable · tap to retry", color = Color(0xFF9F1239), fontSize = 12.sp)
                                     }
                                 }
-                                FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
-                                    onToggleFavorite(track)
+                                if (favoritesOnly) {
+                                    IconButton(
+                                        onClick = { onToggleFavorite(track) },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_close),
+                                            contentDescription = "Remove from favorites",
+                                            tint = Color(0xFF0369A1),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                } else {
+                                    FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
+                                        onToggleFavorite(track)
+                                    }
                                 }
                             }
                         }

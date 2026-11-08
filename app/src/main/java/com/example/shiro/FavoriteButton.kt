@@ -12,8 +12,13 @@ fun loadFavoriteIds(context: Context): Set<String> = context
     .getStringSet("favorite_track_uris", emptySet()).orEmpty().toSet()
 
 fun saveFavoriteIds(context: Context, ids: Set<String>) {
-    context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE).edit()
-        .putStringSet("favorite_track_uris", ids.toSet()).apply()
+    val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
+    prefs.edit()
+        .remove("favorite_track_uris")
+        .apply()
+    prefs.edit()
+        .putStringSet("favorite_track_uris", HashSet(ids))
+        .apply()
 }
 
 @Composable
