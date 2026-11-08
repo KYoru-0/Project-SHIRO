@@ -31,6 +31,7 @@ fun ConnectedShiroStage(
     leftEyeColor: Color,
     rightEyeColor: Color,
     artwork: TrackArtwork? = null,
+    shiroCount: Int = 5,
     modifier: Modifier = Modifier
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -74,6 +75,7 @@ fun ConnectedShiroStage(
         spectrum = frame.bands,
         artwork = artwork,
         isVisible = visible && foreground,
+        shiroCount = shiroCount,
         modifier = modifier
     )
 }

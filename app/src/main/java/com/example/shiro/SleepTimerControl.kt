@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -99,7 +100,7 @@ fun SleepTimerControl(controller: MediaController, modifier: Modifier = Modifier
 
     TextButton(onClick = { refresh(); showDialog = true }, modifier = modifier,
         contentPadding = PaddingValues(16.dp)) {
-        Text(label, color = AccentColor, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+        Text(label, color = Color(0xFF0369A1), fontSize = 16.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth())
     }
     if (showDialog) {

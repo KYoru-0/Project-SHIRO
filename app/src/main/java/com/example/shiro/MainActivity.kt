@@ -20,6 +20,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -63,8 +64,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -94,10 +97,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -415,9 +422,11 @@ fun ShiroScreen(exoPlayer: MediaController) {
     var scanError by remember { mutableStateOf<String?>(null) }
     var cacheError by remember { mutableStateOf(false) }
     var scanJob by remember { mutableStateOf<Job?>(null) }
+    var isLoadingPlaylist by remember { mutableStateOf(false) }
     var scanGeneration by remember { mutableLongStateOf(0L) }
 
     var isRestored by remember { mutableStateOf(false) }
+    var shiroCount by rememberSaveable { mutableIntStateOf(5) }
 
     val isAutoSwaying = isPlaying && danceMode == DanceMode.SWAY
 
@@ -491,6 +500,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
             tracks.clear()
             restoreTrackPosition(emptyList())
             persistPlaylist()
+            isLoadingPlaylist = false
             return
         }
         val retainedTracks = tracks.filter { track -> folders.any { track.belongsToFolder(it.uri) } }
@@ -500,32 +510,46 @@ fun ShiroScreen(exoPlayer: MediaController) {
             restoreTrackPosition(tracks)
             persistPlaylist()
         }
+        isLoadingPlaylist = true
         scanJob = scope.launch {
             var scanningFolder = ""
             val scannedTracks = try {
                 withContext(Dispatchers.IO) {
+                    // Build a fast lookup map from tracks currently loaded or in cache to avoid re-extracting metadata
+                    val cachedMap = buildMap<String, Track> {
+                        tracks.forEach { track ->
+                            put(track.uri.toString(), track)
+                            put(track.fileName, track)
+                        }
+                    }
                     val result = mutableListOf<Track>()
                     for (folder in folders) {
                         scanningFolder = folder.name
-                        result.addAll(scanAudioFilesFromFolder(context, folder.uri))
+                        result.addAll(scanAudioFilesFromFolder(context, folder.uri, cachedMap))
                     }
                     result.distinctBy { it.uri }
                 }
             } catch (cancelled: CancellationException) {
+                isLoadingPlaylist = false
                 throw cancelled
             } catch (_: Exception) {
                 if (generation == scanGeneration && folders == inputFolders.toList()) {
                     scanError = "Couldn't read $scanningFolder. Existing tracks from selected folders have been kept. " +
                         "Reconnect the storage or reselect the folder in Inputs, then retry."
                 }
+                isLoadingPlaylist = false
                 return@launch
             }
-            if (generation != scanGeneration || folders != inputFolders.toList()) return@launch
+            if (generation != scanGeneration || folders != inputFolders.toList()) {
+                isLoadingPlaylist = false
+                return@launch
+            }
             // No suspension between checking the generation and committing the result.
             tracks.clear()
             tracks.addAll(scannedTracks)
             restoreTrackPosition(tracks)
             persistPlaylist()
+            isLoadingPlaylist = false
         }
     }
 
@@ -724,12 +748,19 @@ fun ShiroScreen(exoPlayer: MediaController) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp)
+                                .background(Color.White)
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                                 .statusBarsPadding(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(
-                                onClick = { isMenuOpen = true }
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { isMenuOpen = true },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     painter = painterResource(id = R.drawable.ic_menu),
@@ -739,6 +770,81 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 )
                             }
                             Spacer(Modifier.weight(1f))
+
+                            // Shiro amount controller: - |(shiro icon) ##| +
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                // Minus button (unfilled, drawn icon)
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clickable {
+                                            if (shiroCount > 1) shiroCount--
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Canvas(modifier = Modifier.size(14.dp)) {
+                                        drawLine(
+                                            color = Color(0xFF0369A1),
+                                            start = Offset(0f, size.height / 2f),
+                                            end = Offset(size.width, size.height / 2f),
+                                            strokeWidth = 4f,
+                                            cap = StrokeCap.Round
+                                        )
+                                    }
+                                }
+
+                                // Container: |(shiro icon) ##|
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier
+                                        .background(Color(0xFFF0F6FC), RoundedCornerShape(16.dp))
+                                        .border(1.dp, Color(0xFFBAE6FD), RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_shiro_foreground),
+                                        contentDescription = "Shiro icon",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "$shiroCount",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0369A1)
+                                    )
+                                }
+
+                                // Plus button (unfilled, drawn icon)
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clickable {
+                                            if (shiroCount < 20) shiroCount++
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Canvas(modifier = Modifier.size(14.dp)) {
+                                        drawLine(
+                                            color = Color(0xFF0369A1),
+                                            start = Offset(0f, size.height / 2f),
+                                            end = Offset(size.width, size.height / 2f),
+                                            strokeWidth = 4f,
+                                            cap = StrokeCap.Round
+                                        )
+                                        drawLine(
+                                            color = Color(0xFF0369A1),
+                                            start = Offset(size.width / 2f, 0f),
+                                            end = Offset(size.width / 2f, size.height),
+                                            strokeWidth = 4f,
+                                            cap = StrokeCap.Round
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         Box(
@@ -757,6 +863,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 leftEyeColor = leftEyeColor,
                                 rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
                                 artwork = artwork,
+                                shiroCount = shiroCount,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -774,14 +881,14 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 color = Color(0xFFF8FCFF),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(112.dp)
+                                    .height(148.dp)
                             ) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                                        .padding(horizontal = 20.dp, vertical = 4.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
+                                    verticalArrangement = Arrangement.spacedBy((-1).dp, Alignment.CenterVertically)
                                 ) {
                                     val currentTrack = if (hasTracks && activeIndex in tracks.indices) tracks[activeIndex] else null
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1000,6 +1107,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 } else {
                     PlaylistScreen(
                         tracks = tracks,
+                        isLoading = isLoadingPlaylist,
+                        onReload = { reloadMusicList() },
                         favoriteIds = favoriteIds,
                         unavailableIds = unavailableIds,
                         onToggleFavorite = { toggleFavorite(it) },
@@ -1060,15 +1169,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             shape = RoundedCornerShape(12.dp),
                             color = Color.White,
                             shadowElevation = 2.dp,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            SleepTimerControl(exoPlayer, Modifier.fillMaxWidth())
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.White,
-                            shadowElevation = 2.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
@@ -1083,6 +1183,15 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 color = Color(0xFF0369A1),
                                 modifier = Modifier.padding(16.dp)
                             )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            SleepTimerControl(exoPlayer, Modifier.fillMaxWidth())
                         }
 
                         HorizontalDivider(color = Color(0xFFBAE6FD))
@@ -1451,6 +1560,8 @@ fun Modifier.drawVerticalScrollbar(
 @Composable
 fun PlaylistScreen(
     tracks: List<Track>,
+    isLoading: Boolean = false,
+    onReload: () -> Unit = {},
     favoriteIds: Set<String>,
     unavailableIds: Set<String>,
     onToggleFavorite: (Track) -> Unit,
@@ -1476,22 +1587,71 @@ fun PlaylistScreen(
         }
     }
 
-    LaunchedEffect(isSearchActive) {
-        if (isSearchActive) {
-            focusRequester.requestFocus()
+    val pullOffset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val isRefreshing = isLoading
+
+    // Keep indicator in view whenever loading/refreshing
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing) {
+            pullOffset.animateTo(50f)
         } else {
-            searchQuery = ""
-            isSearchFocused = false
+            pullOffset.animateTo(0f)
         }
     }
 
-    LaunchedEffect(isSearchFocused) {
-        if (!isSearchFocused && isSearchActive) {
+    val nestedScrollConnection = remember(isRefreshing, onReload) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < 0f && pullOffset.value > 0f) {
+                    val newOffset = (pullOffset.value + available.y).coerceAtLeast(0f)
+                    val consumed = newOffset - pullOffset.value
+                    scope.launch { pullOffset.snapTo(newOffset) }
+                    return Offset(0f, consumed)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (available.y > 0f && !isRefreshing) {
+                    val dragged = available.y * 0.5f
+                    val newOffset = (pullOffset.value + dragged).coerceAtMost(80f)
+                    val change = newOffset - pullOffset.value
+                    scope.launch { pullOffset.snapTo(newOffset) }
+                    return Offset(0f, change / 0.5f)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                if (pullOffset.value >= 50f && !isRefreshing) {
+                    onReload()
+                } else if (!isRefreshing) {
+                    pullOffset.animateTo(0f)
+                }
+                return androidx.compose.ui.unit.Velocity.Zero
+            }
+        }
+    }
+
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    // Collapse the bar only if it is empty AND not focused
+    LaunchedEffect(isSearchFocused, searchQuery) {
+        if (!isSearchFocused && searchQuery.isEmpty() && isSearchActive) {
             isSearchActive = false
         }
     }
 
-    val showCloseIcon = isSearchFocused && searchQuery.isNotEmpty()
+    val showCloseIcon = searchQuery.isNotEmpty()
     val actionIconRes = if (showCloseIcon) R.drawable.ic_close else R.drawable.ic_search
 
     Column(
@@ -1503,6 +1663,7 @@ fun PlaylistScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(Color.White)
                 .statusBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -1523,6 +1684,7 @@ fun PlaylistScreen(
                             onClick = {
                                 if (showCloseIcon) {
                                     searchQuery = ""
+                                    // Keep focus state unchanged
                                 } else {
                                     isSearchActive = false
                                     focusManager.clearFocus()
@@ -1557,23 +1719,22 @@ fun PlaylistScreen(
                         }
                 )
             } else {
-                Surface(
-                    shape = CircleShape,
-                    color = ButtonColor,
+                Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .clickable { onBack() }
+                        .background(ButtonColor, CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onBack() },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_back),
-                            contentDescription = "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_back),
+                        contentDescription = "Back",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(16.dp))
@@ -1606,15 +1767,41 @@ fun PlaylistScreen(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            modifier = Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 20.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            FilterChip(selected = !favoritesOnly, onClick = { favoritesOnly = false }, label = { Text("All tracks") })
-            FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = true }, label = { Text("Favorites") })
+            FilterChip(
+                selected = !favoritesOnly,
+                onClick = { favoritesOnly = false },
+                label = { Text("All tracks", color = Color(0xFF0C4A6E)) },
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color(0xFFE0F2FE),
+                    selectedContainerColor = Color(0xFF38BDF8),
+                    labelColor = Color(0xFF0C4A6E),
+                    selectedLabelColor = Color(0xFF0C4A6E)
+                ),
+                border = null
+            )
+            FilterChip(
+                selected = favoritesOnly,
+                onClick = { favoritesOnly = true },
+                label = { Text("Favorites", color = Color(0xFF0C4A6E)) },
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color(0xFFE0F2FE),
+                    selectedContainerColor = Color(0xFF38BDF8),
+                    labelColor = Color(0xFF0C4A6E),
+                    selectedLabelColor = Color(0xFF0C4A6E)
+                ),
+                border = null
+            )
         }
         HorizontalDivider(color = Color(0xFFBAE6FD), thickness = 1.dp)
 
-        Box(modifier = Modifier.weight(1f)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .nestedScroll(nestedScrollConnection)
+        ) {
             if (tracks.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -1757,6 +1944,35 @@ fun PlaylistScreen(
                         }
                 )
             }
+
+            // Spinning loading indicator on top of the playlist
+            if (pullOffset.value > 0f || isRefreshing) {
+                val currentOffsetPx = pullOffset.value
+                val currentOffsetDp = with(LocalDensity.current) { currentOffsetPx.toDp() }
+                val alpha = (currentOffsetPx / 50f).coerceIn(0.2f, 1f)
+
+                Surface(
+                    shape = CircleShape,
+                    color = Color.White,
+                    shadowElevation = 4.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = currentOffsetDp + 8.dp)
+                        .size(36.dp)
+                        .graphicsLayer { this.alpha = alpha }
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            strokeWidth = 3.dp,
+                            color = Color(0xFF0284C7),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1798,23 +2014,22 @@ fun CustomizeScreen(
                 .statusBarsPadding(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = CircleShape,
-                color = ButtonColor,
+            Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clickable { onBack() }
+                    .background(ButtonColor, CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_back),
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_back),
+                    contentDescription = "Back",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
             Spacer(modifier = Modifier.width(16.dp))

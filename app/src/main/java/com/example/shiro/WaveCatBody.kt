@@ -43,7 +43,7 @@ internal class WaveCatBody(var x: Float) {
                 contact = waveContact
             }
             spin += (velocityX / radius.coerceAtLeast(1f) * 57.3f - spin) * (dt * 12f).coerceAtMost(1f)
-        } else spin *= exp(-0.4f * dt)
+        } else spin *= exp(-6.0f * dt)
         rotation = (rotation + spin * dt) % 360f
     }
 
@@ -91,7 +91,11 @@ internal fun resolveCatContacts(bodies: List<WaveCatBody>, outlines: List<CatOut
             a.wobble(-approaching / 400f); b.wobble(-approaching / 400f)
             a.velocityX -= nx * impulse; a.velocityY -= ny * impulse
             b.velocityX += nx * impulse; b.velocityY += ny * impulse
-            a.spin -= ny * impulse; b.spin += ny * impulse
+            a.spin -= ny * impulse * 0.2f
+            b.spin += ny * impulse * 0.2f
+            val avgSpin = (a.spin + b.spin) / 2f
+            a.spin = a.spin * 0.6f + avgSpin * 0.4f
+            b.spin = b.spin * 0.6f + avgSpin * 0.4f
         }
     }
 }

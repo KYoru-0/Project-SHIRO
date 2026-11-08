@@ -68,7 +68,20 @@ internal fun JellyCat(
     jelly: () -> Float, bend: () -> Float, contact: () -> WaveContact?, onTap: () -> Unit, modifier: Modifier
 ) {
     val vertices = remember { FloatArray((JELLY_COLUMNS + 1) * (JELLY_ROWS + 1) * 2) }
-    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
+    val paint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(
+                android.graphics.ColorMatrix().apply {
+                    set(floatArrayOf(
+                        1.08f, 0f, 0f, 0f, 12f,
+                        0f, 1.08f, 0f, 0f, 12f,
+                        0f, 0f, 0f, 1.08f, 0f, 12f,
+                        0f, 0f, 0f, 1f, 0f
+                    ))
+                }
+            )
+        }
+    }
     // Scene-level touch picking follows the outline; semantics and keyboard activation stay accessible.
     Canvas(modifier.semantics {
         contentDescription = "Jelly Shiro, tap to bounce"
