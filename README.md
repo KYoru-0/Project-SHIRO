@@ -8,7 +8,7 @@ At the heart of the app is **Shiro**—an adorable, tail-free round fluff mascot
 
 ## Key Features
 
-### 🎵 Interactive Music Visualizer & Stage
+### Interactive Music Visualizer & Stage
 * **4 Visualizer Combinations**:
   * **Spectrum / Floor**: 24 glass columns with slow peak trails along the bottom details panel.
   * **Spectrum / Circle**: 24 radial glass bars wrapping around the album artwork with peak trails.
@@ -17,7 +17,7 @@ At the heart of the app is **Shiro**—an adorable, tail-free round fluff mascot
 * **Dynamic Palette Theming**: Extracts dominant artwork colors (`ArtworkPalette.kt`) to dynamically theme the seekbar, buttons, details panel, and glass UI cards.
 * **Audio-Driven Motion**: Real-time 24-band FFT spectrum analyzer (`SpectrumAnalyzer.kt`), rhythm tracker (`RhythmTracker.kt`), and peak energy detectors drive visual bar heights, wave amplitudes, and Shiro jump forces without using the microphone.
 
-### 🐱 Deformable Jelly Physics Engine
+### Deformable Jelly Physics Engine
 * **20×16 Deformable Jelly Mesh** (`JellyMesh.kt`): Bellies bulge, bodies bend, and facial expressions deform based on impact speed, local wave slope, and contact points.
 * **120 Hz Physics Substepping** (`WaveCatBody.kt`, `CatPhysicsClock.kt`): Simulates gravity, slope friction, rotational spin, jelly spring recovery, and cat-to-cat collisions.
 * **Core & Shell Contours**: Firm inner circular core and soft outer jelly layer; contact dents deform around the core without collapsing.
@@ -29,13 +29,13 @@ At the heart of the app is **Shiro**—an adorable, tail-free round fluff mascot
   * **Merge**: Drag two child Shiros together to merge them back into a full-sized original.
   * **Population Limit**: Supports 5 to 10 active Shiros.
 
-### 🎧 Background Playback & Media Service
+### Background Playback & Media Service
 * **Foreground Media3 Service** (`PlaybackService.kt`): Independent `MediaSessionService` owning ExoPlayer and MediaSession. Audio playback continues seamlessly in the background when navigating between screens or swiping the app away from recent tasks.
 * **System Media Player Integration**: Integrates directly with Android's native System Media Player card (showing song title, artist, timeline seekbar, play/pause, prev, next, and custom Exit X button).
 * **Sleep Timer** (`SleepTimer.kt`): 15, 30, or 60-minute countdowns or **End of Track** timer. Features a gentle 30-second volume fade, dimmed stage lighting, and sleepy Shiro eye expressions.
 * **Playlist & Storage**: SAF-based music folder scanning (`FolderScan.kt`, `PlaylistScanner.kt`), persistent cache (`PlaylistCache.kt`), and favorite tracks management with filter chips (**All tracks** / **Favorites**).
 
-### 🎨 Adaptive Glassmorphic UI & Widgets
+### Adaptive Glassmorphic UI & Widgets
 * **Glassmorphic Panel Design** (`GlassStyle.kt`): Translucent glass panels with light edge highlights, subtle gradients, and physical touch responses (4% compression, 180ms rim brightening).
 * **App Widgets** (`ShiroWidgetProvider.kt`, `ShiroWidgetUpdates.kt`): Home screen widget displaying current track details, artwork frame, and playback controls.
 
