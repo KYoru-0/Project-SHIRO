@@ -719,171 +719,145 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .navigationBarsPadding()
-                .statusBarsPadding()
-                .padding(top = 56.dp, bottom = 220.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            ConnectedShiroStage(
-                controller = exoPlayer,
-                visible = true,
-                isPlaying = isPlaying,
-                isBlinking = isBlinking,
-                isSleepy = isSleepy,
-                leftEyeColor = leftEyeColor,
-                rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
-                artwork = artwork,
-                shiroCount = shiroCount,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-        if (currentScreen == Screen.CUSTOMIZE) {
-            CustomizeScreen(
-                onBack = { currentScreen = Screen.MAIN },
-                isHeterochromia = isHeterochromia,
-                onHeterochromiaChange = { isHeterochromia = it },
-                leftEyeColor = leftEyeColor,
-                onLeftEyeColorChange = { leftEyeColor = it },
-                rightEyeColor = rightEyeColor,
-                onRightEyeColorChange = { rightEyeColor = it },
-                isBlinking = isBlinking,
-                isSleepy = isSleepy,
-                squishProgress = 0f,
-                squishDirection = squishDirection,
-                isAutoSwaying = isAutoSwaying,
-                swaySkew = 0f,
-                onCharacterTap = {}
-            )
-        } else {
-            Box(modifier = Modifier.fillMaxSize()) {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize()
-                ) { page ->
-                    if (page == 0) {
-                      Box(Modifier.fillMaxSize()) {
-                        Column(
+        HorizontalPager(
+            state = pagerState,
+            beyondViewportPageCount = 1,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            if (page == 0) {
+              Box(Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.verticalGradient(listOf(
+                            Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
+                        )))
+                        .navigationBarsPadding()
+                        .padding(vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .statusBarsPadding(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(Brush.verticalGradient(listOf(
-                                    Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
-                                )))
-                                .navigationBarsPadding()
-                                .padding(vertical = 12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.SpaceBetween
+                                .size(48.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { isMenuOpen = true },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_menu),
+                                contentDescription = "Menu",
+                                tint = Color(0xFF0369A1),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+
+                        // Shiro amount controller: - |(shiro icon) ##| +
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            // Minus button (unfilled, drawn icon)
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.White)
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    .statusBarsPadding(),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .size(32.dp)
+                                    .clickable {
+                                        if (shiroCount > 1) shiroCount--
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) { isMenuOpen = true },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_menu),
-                                        contentDescription = "Menu",
-                                        tint = Color(0xFF0369A1),
-                                        modifier = Modifier.size(28.dp)
+                                Canvas(modifier = Modifier.size(14.dp)) {
+                                    drawLine(
+                                        color = Color(0xFF0369A1),
+                                        start = Offset(0f, size.height / 2f),
+                                        end = Offset(size.width, size.height / 2f),
+                                        strokeWidth = 4f,
+                                        cap = StrokeCap.Round
                                     )
-                                }
-                                Spacer(Modifier.weight(1f))
-
-                                // Shiro amount controller: - |(shiro icon) ##| +
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    // Minus button (unfilled, drawn icon)
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clickable {
-                                                if (shiroCount > 1) shiroCount--
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Canvas(modifier = Modifier.size(14.dp)) {
-                                            drawLine(
-                                                color = Color(0xFF0369A1),
-                                                start = Offset(0f, size.height / 2f),
-                                                end = Offset(size.width, size.height / 2f),
-                                                strokeWidth = 4f,
-                                                cap = StrokeCap.Round
-                                            )
-                                        }
-                                    }
-
-                                    // Container: |(shiro icon) ##|
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier
-                                            .background(Color(0xFFF0F6FC), RoundedCornerShape(16.dp))
-                                            .border(1.dp, Color(0xFFBAE6FD), RoundedCornerShape(16.dp))
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.ic_shiro_foreground),
-                                            contentDescription = "Shiro icon",
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                        Text(
-                                            text = "$shiroCount",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF0369A1)
-                                        )
-                                    }
-
-                                    // Plus button (unfilled, drawn icon)
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clickable {
-                                                if (shiroCount < 20) shiroCount++
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Canvas(modifier = Modifier.size(14.dp)) {
-                                            drawLine(
-                                                color = Color(0xFF0369A1),
-                                                start = Offset(0f, size.height / 2f),
-                                                end = Offset(size.width, size.height / 2f),
-                                                strokeWidth = 4f,
-                                                cap = StrokeCap.Round
-                                            )
-                                            drawLine(
-                                                color = Color(0xFF0369A1),
-                                                start = Offset(size.width / 2f, 0f),
-                                                end = Offset(size.width / 2f, size.height),
-                                                strokeWidth = 4f,
-                                                cap = StrokeCap.Round
-                                            )
-                                        }
-                                    }
                                 }
                             }
 
-                            Spacer(
+                            // Container: |(shiro icon) ##|
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                            )
+                                    .background(Color(0xFFF0F6FC), RoundedCornerShape(16.dp))
+                                    .border(1.dp, Color(0xFFBAE6FD), RoundedCornerShape(16.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_shiro_foreground),
+                                    contentDescription = "Shiro icon",
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    text = "$shiroCount",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0369A1)
+                                )
+                            }
+
+                            // Plus button (unfilled, drawn icon)
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clickable {
+                                        if (shiroCount < 20) shiroCount++
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Canvas(modifier = Modifier.size(14.dp)) {
+                                    drawLine(
+                                        color = Color(0xFF0369A1),
+                                        start = Offset(0f, size.height / 2f),
+                                        end = Offset(size.width, size.height / 2f),
+                                        strokeWidth = 4f,
+                                        cap = StrokeCap.Round
+                                    )
+                                    drawLine(
+                                        color = Color(0xFF0369A1),
+                                        start = Offset(size.width / 2f, 0f),
+                                        end = Offset(size.width / 2f, size.height),
+                                        strokeWidth = 4f,
+                                        cap = StrokeCap.Round
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ConnectedShiroStage(
+                            controller = exoPlayer,
+                            visible = true,
+                            isPlaying = isPlaying,
+                            isBlinking = isBlinking,
+                            isSleepy = isSleepy,
+                            leftEyeColor = leftEyeColor,
+                            rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
+                            artwork = artwork,
+                            shiroCount = shiroCount,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -984,7 +958,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                     colors = SliderDefaults.colors(
                                         thumbColor = ButtonColor,
                                         activeTrackColor = ButtonColor,
-                                        inactiveTrackColor = Color.Transparent,
+                                        inactiveTrackColor = Color(0xFFBAE6FD),
+                                        activeTickColor = Color.Transparent,
                                         inactiveTickColor = Color.Transparent
                                     ),
                                     modifier = Modifier.height(24.dp)
@@ -1365,39 +1340,57 @@ fun ShiroScreen(exoPlayer: MediaController) {
                     }
                 )
             }
+
+            if (currentScreen == Screen.CUSTOMIZE) {
+                CustomizeScreen(
+                    onBack = { currentScreen = Screen.MAIN },
+                    isHeterochromia = isHeterochromia,
+                    onHeterochromiaChange = { isHeterochromia = it },
+                    leftEyeColor = leftEyeColor,
+                    onLeftEyeColorChange = { leftEyeColor = it },
+                    rightEyeColor = rightEyeColor,
+                    onRightEyeColorChange = { rightEyeColor = it },
+                    isBlinking = isBlinking,
+                    isSleepy = isSleepy,
+                    squishProgress = 0f,
+                    squishDirection = squishDirection,
+                    isAutoSwaying = isAutoSwaying,
+                    swaySkew = 0f,
+                    onCharacterTap = {}
+                )
+            }
         }
-    }
-    if (cacheError) {
-        AlertDialog(
-            onDismissRequest = { cacheError = false },
-            title = { Text("Couldn't save the playlist") },
-            text = { Text("Your current playlist still works, but its latest changes may not be restored after closing Shiro. Free some device storage, then retry.") },
-            confirmButton = { TextButton(onClick = { persistPlaylist() }) { Text("Retry save") } },
-            dismissButton = { TextButton(onClick = { cacheError = false }) { Text("Close") } }
-        )
-    }
-    // Compose after Inputs so a failed scan's retry dialog is visible above it.
-    scanError?.let { message ->
-        AlertDialog(
-            onDismissRequest = { scanError = null },
-            title = { Text("Couldn't refresh music") },
-            text = { Text(message) },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        scanError = null
-                        isInputsPopupOpen = true
-                    }) {
-                        Text("Inputs")
+
+        if (cacheError) {
+            AlertDialog(
+                onDismissRequest = { cacheError = false },
+                title = { Text("Couldn't save the playlist") },
+                text = { Text("Your current playlist still works, but its latest changes may not be restored after closing Shiro. Free some device storage, then retry.") },
+                confirmButton = { TextButton(onClick = { persistPlaylist() }) { Text("Retry save") } },
+                dismissButton = { TextButton(onClick = { cacheError = false }) { Text("Close") } }
+            )
+        }
+        // Compose after Inputs so a failed scan's retry dialog is visible above it.
+        scanError?.let { message ->
+            AlertDialog(
+                onDismissRequest = { scanError = null },
+                title = { Text("Couldn't refresh music") },
+                text = { Text(message) },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = {
+                            scanError = null
+                            isInputsPopupOpen = true
+                        }) {
+                            Text("Inputs")
+                        }
+                        TextButton(onClick = { reloadMusicList() }) {
+                            Text("Retry")
+                        }
                     }
-                    TextButton(onClick = { reloadMusicList() }) {
-                        Text("Retry")
-                    }
-                }
-            },
-            dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
+                },
+                dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
         )
-    }
     }
 }
 
