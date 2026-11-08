@@ -1,9 +1,20 @@
 package com.example.shiro
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpectrumFrameQueueTest {
+    @Test fun missingAndExpiredFramesStayDistinctFromRealSilenceIncludingDuringFades() {
+        val queue = SpectrumFrameQueue()
+        assertFalse(queue.currentFrame(0L, 1).available)
+        assertFalse(SpectrumFrame.unavailable().attenuated(0f).available)
+        queue.offer(10L, 1, SpectrumFrame.silence())
+        assertTrue(queue.currentFrame(10L, 1).available)
+        assertTrue(queue.currentFrame(10L, 1).attenuated(0f).available)
+        assertFalse(queue.currentFrame(250_011L, 1).available)
+    }
     private fun frame(level: Float) = SpectrumFrame(FloatArray(SpectrumFrame.BAND_COUNT) { level }, level)
 
     @Test fun waitsForAudibleClockAndExpiresStaleFrames() {

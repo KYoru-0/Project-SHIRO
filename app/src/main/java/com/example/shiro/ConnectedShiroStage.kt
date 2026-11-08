@@ -37,10 +37,11 @@ fun ConnectedShiroStage(
     visualizerMode: VisualizerMode = VisualizerMode.SPECTRUM,
     visualizerLayout: VisualizerLayout = VisualizerLayout.FLOOR,
     trackKey: String? = null,
-    onBackdropFrame: (MusicBackdropFrame) -> Unit = {}
+    stageState: ShiroStageState = remember { ShiroStageState() }
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    var frame by remember { mutableStateOf(SpectrumFrame(FloatArray(24), 0f)) }
+    var frame by stageState.audioFrame
+    var spectrumAvailable by remember { mutableStateOf(false) }
     var sleepTarget by remember { mutableFloatStateOf(0f) }
     var foreground by remember { mutableStateOf(false) }
 
@@ -50,7 +51,12 @@ fun ConnectedShiroStage(
             foreground = true
             PlaybackSpectrum.setVisible(true)
             try {
-                launch { PlaybackSpectrum.frames.collect { frame = it } }
+                launch {
+                    PlaybackSpectrum.frames.collect {
+                        spectrumAvailable = it.available
+                        if (it.available) frame = it
+                    }
+                }
                 while (isActive) {
                     val extras = controller.sessionExtras
                     val timerActive = extras.getLong(SleepTimer.DEADLINE) > 0L ||
@@ -65,12 +71,13 @@ fun ConnectedShiroStage(
             } finally {
                 PlaybackSpectrum.setVisible(false)
                 foreground = false
-                frame = SpectrumFrame(FloatArray(24), 0f)
+                spectrumAvailable = false
             }
         }
     }
 
     ShiroStage(
+        state = stageState,
         isPlaying = isPlaying && visible && foreground,
         isBlinking = isBlinking,
         isSleepy = isSleepy || sleepTarget >= 0.99f,
@@ -78,14 +85,14 @@ fun ConnectedShiroStage(
         leftEyeColor = leftEyeColor,
         rightEyeColor = rightEyeColor,
         spectrum = frame.bands,
-        dynamics = frame.dynamics,
+        spectrumAvailable = spectrumAvailable,
+        dynamics = if (spectrumAvailable) frame.dynamics else frame.dynamics.copy(beatPulse = 0f),
         artwork = artwork,
         revealOnEntry = revealOnEntry,
         onRevealStarted = onRevealStarted,
         visualizerMode = visualizerMode,
         visualizerLayout = visualizerLayout,
         trackKey = trackKey,
-        onBackdropFrame = onBackdropFrame,
         isVisible = visible && foreground,
         modifier = modifier
     )

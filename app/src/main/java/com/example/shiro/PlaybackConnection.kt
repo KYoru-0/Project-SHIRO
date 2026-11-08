@@ -20,7 +20,7 @@ import kotlinx.coroutines.delay
 
 /** The UI connects to the service; disposing it never releases the service's player. */
 @Composable
-fun ShiroScreen() {
+fun ShiroScreen(stageState: ShiroStageState = remember { ShiroStageState() }) {
     // Android Studio previews must not connect to a service.
     if (LocalInspectionMode.current) {
         ShiroLoadingScene()
@@ -66,7 +66,7 @@ fun ShiroScreen() {
     }
 
     Crossfade(targetState = controller != null, animationSpec = tween(220), label = "Player startup") { ready ->
-        if (ready) controller?.let { ShiroScreen(it) }
+        if (ready) controller?.let { ShiroScreen(it, stageState) }
         else ShiroLoadingScene(failed = failed, takingLonger = takingLonger, onRetry = { retry++ })
     }
 }

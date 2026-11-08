@@ -63,7 +63,7 @@ internal fun PlayerColors.glassTint(dense: Boolean = false, selected: Boolean = 
 internal fun glassHighlight(dense: Boolean = false): Color =
     Color.White.copy(alpha = if (dense) 1f else 0.20f)
 
-/** Dense overlays block the screen beneath; ordinary cards retain translucent tint and highlights. */
+/** Opaque overlays may cast shadows; translucent cards use tint and rims to avoid inner patches. */
 internal fun Modifier.glassPanel(
     colors: PlayerColors,
     shape: Shape = RoundedCornerShape(20.dp),
@@ -71,7 +71,7 @@ internal fun Modifier.glassPanel(
     selected: Boolean = false,
     elevation: Dp = 0.dp,
     softHighlight: Boolean = false
-): Modifier = shadow(elevation, shape, clip = false,
+): Modifier = shadow(if (dense) elevation else 0.dp, shape, clip = false,
     ambientColor = colors.text.copy(alpha = 0.14f), spotColor = colors.text.copy(alpha = 0.14f))
     .clip(shape)
     .background(if (softHighlight) Brush.verticalGradient(listOf(
