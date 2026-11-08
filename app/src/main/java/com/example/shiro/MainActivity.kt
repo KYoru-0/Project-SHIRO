@@ -813,8 +813,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
-                        StageGradient(playerColors, visualizerMode, visualizerLayout, backdropFrame,
-                            Modifier.matchParentSize())
+
                         Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
                         Row(
                             modifier = Modifier
