@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -58,6 +59,14 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 private data class CatPose(val x: Float = 0f, val height: Float = 0f, val rotation: Float = 0f, val compression: Float = 0f, val foot: Float = 0f, val bend: Float = 0f, val contact: WaveContact? = null)
+
+private data class CatInstance(
+    val body: WaveCatBody,
+    val pose: MutableState<CatPose>,
+    var outline: CatOutline,
+    val blinkState: MutableState<Boolean>,
+    var prevContact: WaveContact? = null
+)
 
 /** Five jelly cats share the same rendered wave used for contact physics. */
 @Composable
@@ -105,94 +114,71 @@ fun ShiroStage(
             body.compression, bend(body), body.rotation, body.contact)
         val ceiling = maxHeight.value
 
-        val bodies = remember(widthDp, ceiling) {
-            mutableStateOf(
-                List(shiroCount) { i ->
-                    WaveCatBody(widthDp / 2f + (i - shiroCount / 2f) * 24f).apply {
-                        height = ceiling + 80f + i * 25f
-                        rotation = Random.nextFloat() * 80f - 40f
-                        velocityX = (Random.nextFloat() - 0.5f) * 60f
-                        spin = (Random.nextFloat() - 0.5f) * 120f
-                    }
+        val catsState = remember(widthDp, ceiling) {
+            val initialCats = List(shiroCount) { i ->
+                val body = WaveCatBody(widthDp / 2f + (i - shiroCount / 2f) * 24f).apply {
+                    height = ceiling + 80f + i * 25f
+                    rotation = Random.nextFloat() * 80f - 40f
+                    velocityX = (Random.nextFloat() - 0.5f) * 60f
+                    spin = (Random.nextFloat() - 0.5f) * 120f
                 }
-            )
+                val out = deformCatOutline(sprites.hull, catWidth.value, catHeight.value, 0f, 0f, body.rotation, null)
+                CatInstance(
+                    body = body,
+                    pose = mutableStateOf(CatPose(body.x, body.height, body.rotation)),
+                    outline = out,
+                    blinkState = mutableStateOf(false)
+                )
+            }
+            mutableStateOf(initialCats)
         }
 
         LaunchedEffect(shiroCount, widthDp, ceiling) {
-            val current = bodies.value
+            val current = catsState.value
             if (current.size < shiroCount) {
                 val added = List(shiroCount - current.size) { i ->
                     val idx = current.size + i
-                    WaveCatBody(widthDp / 2f + (Random.nextFloat() - 0.5f) * 40f).apply {
+                    val body = WaveCatBody(widthDp / 2f + (Random.nextFloat() - 0.5f) * 40f).apply {
                         height = ceiling + 80f + idx * 25f
                         rotation = Random.nextFloat() * 80f - 40f
                         velocityX = (Random.nextFloat() - 0.5f) * 80f
                         spin = (Random.nextFloat() - 0.5f) * 150f
                     }
+                    val out = deformCatOutline(sprites.hull, catWidth.value, catHeight.value, 0f, 0f, body.rotation, null)
+                    CatInstance(
+                        body = body,
+                        pose = mutableStateOf(CatPose(body.x, body.height, body.rotation)),
+                        outline = out,
+                        blinkState = mutableStateOf(false)
+                    )
                 }
-                bodies.value = current + added
+                catsState.value = current + added
             } else if (current.size > shiroCount) {
-                bodies.value = current.take(shiroCount)
+                catsState.value = current.take(shiroCount)
             }
         }
 
-        val currentBodies = bodies.value
-        val poses = remember { mutableStateOf(currentBodies.map { mutableStateOf(CatPose(it.x, it.height)) }) }
-        val outlines = remember { mutableStateOf(currentBodies.map { outline(it) }.toMutableList()) }
-        val blinkStates = remember { mutableStateOf(currentBodies.map { mutableStateOf(false) }) }
-        val prevContacts = remember { mutableStateOf(arrayOfNulls<WaveContact>(currentBodies.size)) }
+        val cats = catsState.value
         val scope = rememberCoroutineScope()
 
-        LaunchedEffect(shiroCount) {
-            val bodiesList = bodies.value
-            val currentPoses = poses.value
-            val currentOutlines = outlines.value
-            val currentBlinks = blinkStates.value
-            val currentPrevContacts = prevContacts.value
-
-            if (bodiesList.size > currentPoses.size) {
-                val addedCount = bodiesList.size - currentPoses.size
-                poses.value = currentPoses + List(addedCount) { i ->
-                    val body = bodiesList[currentPoses.size + i]
-                    mutableStateOf(CatPose(body.x, body.height))
-                }
-                outlines.value = (currentOutlines + List(addedCount) { i ->
-                    outline(bodiesList[currentOutlines.size + i])
-                }).toMutableList()
-                blinkStates.value = currentBlinks + List(addedCount) { mutableStateOf(false) }
-                prevContacts.value = Array(bodiesList.size) { i ->
-                    if (i < currentPrevContacts.size) currentPrevContacts[i] else null
-                }
-            } else if (bodiesList.size < currentPoses.size) {
-                poses.value = currentPoses.take(shiroCount)
-                outlines.value = currentOutlines.take(shiroCount).toMutableList()
-                blinkStates.value = currentBlinks.take(shiroCount)
-                prevContacts.value = Array(shiroCount) { i -> currentPrevContacts.getOrNull(i) }
-            }
-        }
-
         // Auto-blink: all cats blink together on a synced 3–7 s timer.
-        LaunchedEffect(currentBodies) {
+        LaunchedEffect(cats) {
             while (isActive) {
                 delay((3_000L..7_000L).random())
-                currentBodies.indices.forEach { index ->
-                    if (index < blinkStates.value.size) blinkStates.value[index].value = true
-                }
+                cats.forEach { it.blinkState.value = true }
                 delay(120L)
-                currentBodies.indices.forEach { index ->
-                    if (index < blinkStates.value.size) blinkStates.value[index].value = false
-                }
+                cats.forEach { it.blinkState.value = false }
             }
         }
 
         var tapVersion by remember { mutableIntStateOf(0) }
         fun nudge(index: Int) {
-            val body = currentBodies.getOrNull(index) ?: return
-            body.tap(if (body.x < widthDp / 2f) 1f else -1f)
+            val cat = cats.getOrNull(index) ?: return
+            cat.body.tap(if (cat.body.x < widthDp / 2f) 1f else -1f)
             tapVersion++
         }
 
-        LaunchedEffect(isVisible, isPlaying, waveHeight, currentBodies, ceiling, sprites, tapVersion) {
+        LaunchedEffect(isVisible, isPlaying, waveHeight, cats, ceiling, sprites, tapVersion) {
             if (!isVisible || widthDp <= 0f || radius <= 0f) return@LaunchedEffect
             var lastFrame = 0L
             while (isActive) {
@@ -202,9 +188,12 @@ fun ShiroStage(
                 val bands = displayed.value
                 val amplitude = (waveHeight.value - 2f) * (1f - currentNight * 0.22f)
                 val steps = ceil(dt * 120f).toInt().coerceIn(1, 4)
+                val currentBodies = cats.map { it.body }
+                val currentOutlines = cats.map { it.outline }.toMutableList()
                 repeat(steps) {
-                    currentBodies.forEachIndexed { index, body ->
-                        val shape = outlines.value.getOrNull(index) ?: outline(body)
+                    cats.forEachIndexed { index, cat ->
+                        val body = cat.body
+                        val shape = cat.outline
                         val center = body.x / widthDp
                         val spread = radius / widthDp
                         val surface = waveHeightAt(bands, center) * amplitude
@@ -214,34 +203,32 @@ fun ShiroStage(
                         val contact = waveContactAt(wave.point, body.x, body.rotation, catWidth.value,
                             catHeight.value, bands, widthDp, amplitude)
                         body.step(wave.centerHeight - shape.support, slope, dt / steps, shape.support, surface, contact)
-                        if (index < outlines.value.size) outlines.value[index] = outline(body)
-                        body.contain(widthDp, ceiling, outlines.value.getOrNull(index) ?: outline(body))
+                        cat.outline = outline(body)
+                        currentOutlines[index] = cat.outline
+                        body.contain(widthDp, ceiling, cat.outline)
                     }
-                    if (currentBodies.size == outlines.value.size) {
-                        resolveCatContacts(currentBodies, outlines.value)
+                    if (currentBodies.size == currentOutlines.size) {
+                        resolveCatContacts(currentBodies, currentOutlines)
                     }
                 }
-                currentBodies.forEachIndexed { index, body ->
-                    if (index < poses.value.size) {
-                        val shape = outlines.value.getOrNull(index) ?: outline(body)
-                        poses.value[index].value = CatPose(body.x, body.height, body.rotation, body.compression,
-                            body.height - shape.support, bend(body), body.contact)
-                    }
-                    if (index < prevContacts.value.size && index < blinkStates.value.size) {
-                        val hadContact = prevContacts.value[index] != null
-                        val hasContact = body.contact != null
-                        if (hasContact && !hadContact && !blinkStates.value[index].value) {
-                            scope.launch {
-                                blinkStates.value[index].value = true
-                                delay(120L)
-                                blinkStates.value[index].value = false
-                            }
+                cats.forEach { cat ->
+                    val body = cat.body
+                    val shape = cat.outline
+                    cat.pose.value = CatPose(body.x, body.height, body.rotation, body.compression,
+                        body.height - shape.support, bend(body), body.contact)
+                    val hadContact = cat.prevContact != null
+                    val hasContact = body.contact != null
+                    if (hasContact && !hadContact && !cat.blinkState.value) {
+                        scope.launch {
+                            cat.blinkState.value = true
+                            delay(120L)
+                            cat.blinkState.value = false
                         }
-                        prevContacts.value[index] = body.contact
                     }
+                    cat.prevContact = body.contact
                 }
                 if (!isPlaying && bands.all { it < 0.001f } &&
-                    currentBodies.indices.all { currentBodies[it].isSettled(outlines.value.getOrNull(it)?.support ?: 0f) }) break
+                    cats.all { it.body.isSettled(it.outline.support) }) break
             }
         }
 
@@ -250,19 +237,19 @@ fun ShiroStage(
                 Color(0xFF47618A).copy(alpha = night * 0.24f), Color.Transparent)))
         }
         SpectrumWave(
-            displayed, poses.value, night, isPlaying, artwork?.colors,
+            displayed, cats.map { it.pose }, night, isPlaying, artwork?.colors,
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(waveHeight)
         )
-        currentBodies.forEachIndexed { index, body ->
+        cats.forEachIndexed { index, cat ->
             WaveCat(
-                pose = poses.value[index],
-                isBlinking = isBlinking || blinkStates.value[index].value, isSleepy = isSleepy,
+                pose = cat.pose,
+                isBlinking = isBlinking || cat.blinkState.value, isSleepy = isSleepy,
                 sprites = sprites,
                 night = night,
                 onNudge = { nudge(index) },
                 modifier = Modifier.align(Alignment.BottomStart).size(catWidth, catHeight)
                     .graphicsLayer {
-                        val pose = poses.value[index].value
+                        val pose = cat.pose.value
                         transformOrigin = TransformOrigin(0.5f, 0.55f)
                         translationX = (pose.x - catWidth.value / 2f).dp.toPx()
                         translationY = (catHeight.value * 0.45f - pose.height).dp.toPx()
@@ -271,12 +258,12 @@ fun ShiroStage(
             )
         }
         val density = LocalDensity.current.density
-        Box(Modifier.matchParentSize().pointerInput(currentBodies, sprites, density, ceiling) {
+        Box(Modifier.matchParentSize().pointerInput(cats, sprites, density, ceiling) {
             detectTapGestures { position ->
                 val x = position.x / density
                 val y = ceiling - position.y / density
-                currentBodies.indices.reversed().firstOrNull { index ->
-                    val pose = poses.value[index].value
+                cats.indices.reversed().firstOrNull { index ->
+                    val pose = cats.getOrNull(index)?.pose?.value ?: return@firstOrNull false
                     val shape = deformCatOutline(sprites.hull, catWidth.value, catHeight.value,
                         pose.compression, pose.bend, pose.rotation, pose.contact)
                     shape.contains(x - pose.x, y - pose.height)
