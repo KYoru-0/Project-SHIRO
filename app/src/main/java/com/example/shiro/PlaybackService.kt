@@ -41,7 +41,7 @@ class PlaybackService : MediaSessionService() {
     private fun updateCustomLayout() {
         val shiroButton = CommandButton.Builder()
             .setDisplayName("Shiro")
-            .setIconResId(R.drawable.ic_shiro_foreground)
+            .setIconResId(R.drawable.shiro_body_neutral)
             .setSessionCommand(shiroCommand)
             .build()
 
@@ -151,7 +151,7 @@ class PlaybackService : MediaSessionService() {
 
                     val shiroButton = CommandButton.Builder()
                         .setDisplayName("Shiro")
-                        .setIconResId(R.drawable.ic_shiro_foreground)
+                        .setIconResId(R.drawable.shiro_body_neutral)
                         .setSessionCommand(shiroCommand)
                         .build()
 
