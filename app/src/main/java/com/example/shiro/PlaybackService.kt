@@ -175,10 +175,7 @@ class PlaybackService : MediaSessionService() {
                     args: Bundle
                 ): ListenableFuture<SessionResult> {
                     if (customCommand.customAction == ACTION_SHIRO) {
-                        val launchIntent = Intent(this@PlaybackService, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-                        startActivity(launchIntent)
+                        // Static branding button: no-op when clicked
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
                     if (customCommand.customAction == ACTION_CLOSE) {
