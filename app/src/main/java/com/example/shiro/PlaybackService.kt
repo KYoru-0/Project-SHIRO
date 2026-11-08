@@ -417,8 +417,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         persistPlayback()
-        // Keep playing when the app is swiped away. A paused player can release its service.
-        if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED) stopSelf()
+        stopSelf()
     }
 
     override fun onDestroy() {

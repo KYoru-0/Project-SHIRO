@@ -864,8 +864,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
                         ) {
                             ConnectedShiroStage(
                                 controller = exoPlayer,
-                                visible = currentScreen == Screen.MAIN && pagerState.currentPage == 0 &&
-                                    !isMenuOpen && !isInputsPopupOpen,
+                                visible = currentScreen == Screen.MAIN,
                                 isPlaying = isPlaying,
                                 isBlinking = isBlinking,
                                 isSleepy = isSleepy,
