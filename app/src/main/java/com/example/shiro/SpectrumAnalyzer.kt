@@ -27,6 +27,7 @@ internal class SpectrumAnalyzer(
     private var writeIndex = 0
     private var samplesSeen = 0
     private var samplesSinceFrame = 0
+    private var hasSmoothedFrame = false
     private val hopSize = max(1, sampleRate / 30)
     private val minimumHz = 40.0
     private val maximumHz = min(16_000.0, sampleRate / 2.0)
@@ -44,6 +45,7 @@ internal class SpectrumAnalyzer(
         writeIndex = 0
         samplesSeen = 0
         samplesSinceFrame = 0
+        hasSmoothedFrame = false
     }
 
     /** Returns a new snapshot at most 30 times per second of audio. */
@@ -106,10 +108,13 @@ internal class SpectrumAnalyzer(
         for (band in output.indices) {
             val level = rawLevels[band]
             val blend = if (level > smoothed[band]) rise else fall
-            smoothed[band] += blend * (level - smoothed[band])
+            // Seed from the first full PCM window. A reset must not invent a fade from zero;
+            // the display already provides the bounded Play/resume animation.
+            smoothed[band] = if (hasSmoothedFrame) smoothed[band] + blend * (level - smoothed[band]) else level
             output[band] = smoothed[band].let { if (it < 0.001f) 0f else it.coerceIn(0f, 1f) }
             if (band <= lastBassBand) bass = max(bass, output[band])
         }
+        hasSmoothedFrame = true
         return SpectrumFrame(output, bass, dynamics)
     }
 

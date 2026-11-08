@@ -50,6 +50,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlin.math.sin
@@ -75,19 +78,19 @@ fun ShiroStage(
     visualizerMode: VisualizerMode = VisualizerMode.SPECTRUM,
     visualizerLayout: VisualizerLayout = VisualizerLayout.FLOOR,
     trackKey: String? = null,
-    onBackdropFrame: (MusicBackdropFrame) -> Unit = {}
+    state: ShiroStageState = remember { ShiroStageState() },
+    spectrumAvailable: Boolean = true
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
     val circular = visualizerLayout == VisualizerLayout.CIRCLE
     val night by animateFloatAsState(sleepProgress.coerceIn(0f, 1f), tween(900), label = "Bedtime lighting")
     val currentNight by rememberUpdatedState(night)
     val currentDynamics by rememberUpdatedState(dynamics)
-    val publishBackdrop by rememberUpdatedState(onBackdropFrame)
-    val backdropMotion = remember { MusicBackdropMotion() }
-    val circularDrift = remember { CircularDrift() }
-    val displayed = rememberSmoothSpectrum(spectrum, dynamics, isPlaying, isVisible)
-    val peaks = rememberSpectrumPeaks(displayed, isPlaying, isVisible && visualizerMode == VisualizerMode.SPECTRUM)
+    val circularDrift = state.circularDrift
+    val displayed = rememberSmoothSpectrum(spectrum, dynamics, isPlaying, isVisible, state, spectrumAvailable)
+    val peaks = rememberSpectrumPeaks(displayed, isPlaying, isVisible && visualizerMode == VisualizerMode.SPECTRUM, state)
     val sprites = rememberJellySprites(leftEyeColor, rightEyeColor)
-    val reveal = remember { mutableFloatStateOf(if (revealOnEntry) 0f else 1f) }
+    val reveal = state.reveal
     LaunchedEffect(isVisible) {
         if (!isVisible || reveal.floatValue >= 1f) return@LaunchedEffect
         if (!revealOnEntry) { reveal.floatValue = 1f; return@LaunchedEffect }
@@ -128,9 +131,8 @@ fun ShiroStage(
             catWidth.value * body.sizeScale, catHeight.value * body.sizeScale,
             body.compression, bend(body), body.rotation, body.contact)
         val ceiling = maxHeight.value
-        val bodies = remember(widthDp, radius) {
-            createShiroFamilies(widthDp, radius)
-        }
+        if (widthDp <= 0f || ceiling <= 0f) return@BoxWithConstraints
+        val bodies = state.bodiesFor(widthDp, ceiling, radius)
         val beatBounce = remember(bodies) { CatBeatBounce() }
         val centerField = remember(bodies, ceiling) { CenterCatField(widthDp, ceiling, bodies.size) }
         fun sampleSurface(body: WaveCatBody, shape: CatOutline, amplitude: Float): CatWaveSample =
@@ -142,9 +144,10 @@ fun ShiroStage(
             }
         var populationVersion by remember(bodies) { mutableIntStateOf(0) }
         val activeIndices = remember(bodies, populationVersion) { bodies.indices.filter { bodies[it].active } }
-        val poses = remember(bodies) { bodies.map { mutableStateOf(CatPose(it.x, it.height)) } }
-        val smokeOrigins = remember(bodies) { arrayOfNulls<CatPoint>(SHIRO_ORIGINAL_COUNT) }
-        val outlines = remember(bodies, sprites) { bodies.map { outline(it) }.toMutableList() }
+        val poses = remember(bodies, widthDp, ceiling) { bodies.map {
+            mutableStateOf(CatPose(it.x, it.height, it.rotation, it.compression, bend(it), it.contact))
+        } }
+        val outlines = remember(bodies, sprites, widthDp, ceiling) { bodies.map { outline(it) }.toMutableList() }
         val impacts = remember(bodies, ceiling) { SpectrumImpacts(bodies.size) }
         val splashes = remember(impacts) { mutableStateOf<List<SpectrumSplash>>(emptyList()) }
         var tapVersion by remember { mutableIntStateOf(0) }
@@ -187,39 +190,35 @@ fun ShiroStage(
             tapVersion++
             return merged
         }
-        LaunchedEffect(isVisible, isPlaying, isSleepy, bodies, ceiling, populationVersion) {
+        LaunchedEffect(lifecycleOwner, isVisible, isPlaying, isSleepy, bodies, ceiling, populationVersion) {
             if (!isVisible || isPlaying || isSleepy) return@LaunchedEffect
-            // Let the spectrum descend and the entrance finish before the first idle hop.
-            delay(1800L)
-            var turn = 0
-            while (isActive) {
-                val index = activeIndices[turn % activeIndices.size]
-                val body = bodies[index]
-                if (body.active && reveal.floatValue >= 1f && displayed.value.all { it < 0.001f } &&
-                    body.isSettled(outline(body).support)) {
-                    val direction = when {
-                        body.x < widthDp * 0.2f -> 1f
-                        body.x > widthDp * 0.8f -> -1f
-                        turn % 2 == 0 -> 1f
-                        else -> -1f
+            // delay() keeps running when the Compose frame clock pauses, so gate it directly.
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                // Let the spectrum descend and the entrance finish before the first idle hop.
+                delay(1800L)
+                var turn = 0
+                while (isActive) {
+                    val index = activeIndices[turn % activeIndices.size]
+                    val body = bodies[index]
+                    if (body.active && reveal.floatValue >= 1f && displayed.value.all { it < 0.001f } &&
+                        body.isSettled(outline(body).support)) {
+                        val direction = when {
+                            body.x < widthDp * 0.2f -> 1f
+                            body.x > widthDp * 0.8f -> -1f
+                            turn % 2 == 0 -> 1f
+                            else -> -1f
+                        }
+                        body.idleHop(direction)
+                        tapVersion++
                     }
-                    body.idleHop(direction)
-                    tapVersion++
+                    turn++
+                    delay(800L + turn % SHIRO_ORIGINAL_COUNT * 60L)
                 }
-                turn++
-                delay(800L + turn % SHIRO_ORIGINAL_COUNT * 60L)
             }
         }
         LaunchedEffect(isVisible, isPlaying, waveHeight, bodies, ceiling, sprites, tapVersion, populationVersion, visualizerMode, visualizerLayout, trackKey) {
             if (!isVisible || widthDp <= 0f || radius <= 0f) {
-                impacts.clear()
-                splashes.value = emptyList()
-                visualMotion.reset()
-                circularDrift.stop()
-                publishBackdrop(backdropMotion.reset())
-                centerField.reset()
-                circularScene.value = null
-                visualFrame.value = VisualizerFrame()
+                // Freeze the scene while hidden. Returning resumes it with a fresh frame clock.
                 return@LaunchedEffect
             }
             if (!circular) { centerField.reset(); circularDrift.stop() }
@@ -259,11 +258,13 @@ fun ShiroStage(
                         beatBounce.trigger(bodies, outlines, frame.onset * (1f - currentNight), widthDp)
                     }
                 }
-                publishBackdrop(backdropMotion.advance(bands, currentDynamics, isPlaying, dt,
-                    motionEnabled = ValueAnimator.areAnimatorsEnabled(),
-                    rotation = gradientRotation, circleHeight = gradientCircleHeight))
                 val impactDrive = if (isPlaying) currentDynamics.impactDrive * (1f - currentNight) else 0f
-                val steps = physicsClock.steps(elapsed)
+                state.backdrop.value = state.backdropMotion.advance(bands, currentDynamics, isPlaying, dt,
+                    motionEnabled = ValueAnimator.areAnimatorsEnabled(),
+                    rotation = gradientRotation, circleHeight = gradientCircleHeight)
+                // Briefly show the gathered group, then release it without accumulating catch-up steps.
+                val steps = if (reveal.floatValue * SHIRO_REVEAL_MILLIS < SHIRO_GATHER_MILLIS) 0
+                    else physicsClock.steps(elapsed)
                 repeat(steps) {
                     activeIndices.forEach { index ->
                         val body = bodies[index]
@@ -343,16 +344,9 @@ fun ShiroStage(
                     }
                 }
                 activeIndices.forEach { publishPose(it) }
-                if (reveal.floatValue < 1f) activeIndices.forEach { index ->
-                    val body = bodies[index]
-                    val original = index / SHIRO_FAMILY_SIZE
-                    if (smokeOrigins[original] == null && shiroRevealPhase(reveal.floatValue, original) > 0f) {
-                        smokeOrigins[original] = CatPoint(body.x, (body.height - outlines[index].support).coerceAtLeast(0f))
-                    }
-                }
                 splashes.value = impacts.snapshot()
                 // Sleep between occasional idle hops once all physics and effects have settled.
-                if (reveal.floatValue >= 1f && !isPlaying && backdropMotion.isSettled && circularDrift.isSettled && centerField.strength == 0f && impacts.isEmpty && visualFrame.value.ripples.isEmpty() && bands.all { it < 0.001f } &&
+                if (reveal.floatValue >= 1f && !isPlaying && state.backdropMotion.isSettled && circularDrift.isSettled && centerField.strength == 0f && impacts.isEmpty && visualFrame.value.ripples.isEmpty() && bands.all { it < 0.001f } &&
                     activeIndices.all { bodies[it].isSettled(outlines[it].support) }) break
             }
         }
@@ -384,7 +378,7 @@ fun ShiroStage(
                     }
                     val reach = catHeight.value * bodies[index].sizeScale * 1.6f
                     val proximity = (1f - (foot - surface).coerceAtLeast(0f) / reach).coerceIn(0f, 1f)
-                    val alpha = proximity * proximity * 0.24f * shiroRevealPhase(reveal.floatValue, index / SHIRO_FAMILY_SIZE)
+                    val alpha = proximity * proximity * 0.24f
                     if (alpha < 0.005f) continue
                     val radiusX = (shape.right - shape.left).dp.toPx() * 0.42f
                     val radiusY = 2.dp.toPx() * bodies[index].sizeScale
@@ -409,7 +403,6 @@ fun ShiroStage(
                 val foot = (pose.height - shape.support).dp.toPx()
                 val reach = catHeight.toPx() * bodies[index].sizeScale * 1.6f
                 val radiusX = (shape.right - shape.left).dp.toPx() * 0.48f
-                val entrance = shiroRevealPhase(reveal.floatValue, index / SHIRO_FAMILY_SIZE)
                 val first = ((centerX - radiusX) / slot).toInt().coerceIn(0, bands.lastIndex)
                 val last = ((centerX + radiusX) / slot).toInt().coerceIn(0, bands.lastIndex)
                 // Project onto nearby bar tops, clipped inside their faces so gaps stay clear.
@@ -417,7 +410,7 @@ fun ShiroStage(
                 for (bar in first..last) {
                     val height = bands[bar] * amplitude
                     val proximity = (1f - (foot - height).coerceAtLeast(0f) / reach).coerceIn(0f, 1f)
-                    val alpha = proximity * proximity * 0.24f * entrance
+                    val alpha = proximity * proximity * 0.24f
                     if (alpha < 0.005f || radiusX <= 0f) continue
                     val baseline = height < 1.dp.toPx()
                     val top = size.height - height
@@ -435,7 +428,6 @@ fun ShiroStage(
             }
         }
         SpectrumSplashLayer(splashes, splashColor, Modifier.matchParentSize())
-        ShiroEntranceSmoke(reveal, smokeOrigins, Modifier.matchParentSize())
         activeIndices.forEach { index ->
             val body = bodies[index]
             val bodyWidth = catWidth * body.sizeScale
@@ -452,13 +444,10 @@ fun ShiroStage(
                     modifier = Modifier.align(Alignment.BottomStart).size(bodyWidth, bodyHeight)
                         .graphicsLayer {
                             val pose = poses[index].value
-                            val entrance = shiroRevealPhase(reveal.floatValue, index / SHIRO_FAMILY_SIZE)
                             transformOrigin = TransformOrigin(0.5f, 0.55f)
-                            alpha = (entrance * 4f).coerceAtMost(1f)
-                            scaleX = shiroRevealScale(entrance)
-                            scaleY = scaleX
+                            alpha = (reveal.floatValue * 12f).coerceAtMost(1f)
                             translationX = (pose.x - bodyWidth.value / 2f).dp.toPx()
-                            translationY = (bodyHeight.value * 0.45f - pose.height + (1f - entrance) * 8f).dp.toPx()
+                            translationY = (bodyHeight.value * 0.45f - pose.height).dp.toPx()
                             rotationZ = pose.rotation
                         }
                 )
@@ -577,26 +566,30 @@ private fun WaveCat(
 
 @Composable
 private fun rememberSmoothSpectrum(spectrum: FloatArray, dynamics: MusicDynamics,
-    isPlaying: Boolean, isVisible: Boolean): State<FloatArray> {
-    val displayed = remember { mutableStateOf(FloatArray(SpectrumFrame.BAND_COUNT)) }
+    isPlaying: Boolean, isVisible: Boolean, state: ShiroStageState, spectrumAvailable: Boolean): State<FloatArray> {
+    val displayed = state.displayed
     val resumeRamp = remember { SpectrumResumeRamp() }
     val latestBands by rememberUpdatedState(spectrum)
     val latestDynamics by rememberUpdatedState(dynamics)
+    val latestAvailable by rememberUpdatedState(spectrumAvailable)
+    val emptyBands = remember { FloatArray(SpectrumFrame.BAND_COUNT) }
     LaunchedEffect(isPlaying, isVisible) {
         if (!isVisible) {
-            displayed.value = FloatArray(SpectrumFrame.BAND_COUNT)
             resumeRamp.reset()
             return@LaunchedEffect
         }
         var lastFrame = 0L
+        val handoff = SpectrumHandoff()
         resumeRamp.reset()
         // One loop reads the latest audio target; a new FFT frame no longer restarts an animation.
         while (isActive) {
             val now = withFrameNanos { it }
-            val dt = (if (lastFrame == 0L) 1f / 60f else (now - lastFrame) / 1_000_000_000f)
-                .coerceIn(0f, 1f / 30f)
+            val elapsed = if (lastFrame == 0L) 1f / 60f else (now - lastFrame) / 1_000_000_000f
+            val dt = elapsed.coerceIn(0f, 1f / 30f)
             lastFrame = now
-            val bands = latestBands
+            // Physics and liquid motion still run against the retained surface during this handoff.
+            if (handoff.shouldHold(isPlaying, latestAvailable, elapsed)) continue
+            val bands = if (latestAvailable) latestBands else emptyBands
             val maximumRise = resumeRamp.maximumRise(isPlaying, bands, dt)
             displayed.value = advanceMusicSpectrum(displayed.value, bands, latestDynamics, isPlaying, dt, maximumRise)
             if (!isPlaying && displayed.value.all { it == 0f }) break
@@ -606,13 +599,12 @@ private fun rememberSmoothSpectrum(spectrum: FloatArray, dynamics: MusicDynamics
 }
 
 @Composable
-private fun rememberSpectrumPeaks(displayed: State<FloatArray>, isPlaying: Boolean, isVisible: Boolean): State<FloatArray> {
-    val tracker = remember { SpectrumPeaks(SpectrumFrame.BAND_COUNT) }
-    val peaks = remember { mutableStateOf(FloatArray(SpectrumFrame.BAND_COUNT)) }
+private fun rememberSpectrumPeaks(displayed: State<FloatArray>, isPlaying: Boolean, isVisible: Boolean,
+    state: ShiroStageState): State<FloatArray> {
+    val tracker = state.peakTracker
+    val peaks = state.peaks
     LaunchedEffect(isVisible, isPlaying) {
         if (!isVisible) {
-            tracker.reset()
-            peaks.value = tracker.levels.copyOf()
             return@LaunchedEffect
         }
         var lastFrame = 0L

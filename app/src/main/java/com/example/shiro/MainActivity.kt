@@ -76,8 +76,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -108,6 +106,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -127,6 +127,7 @@ import androidx.core.content.edit
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModelProvider
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -140,6 +141,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.lifecycle.repeatOnLifecycle
 import kotlin.random.Random
 import java.util.Locale
@@ -149,9 +152,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val stageState = ViewModelProvider(this)[ShiroSessionViewModel::class.java].stage
         this.setContent {
             ProjectSHIROTheme {
-                ShiroGlassTheme { ShiroScreen() }
+                ShiroGlassTheme { ShiroScreen(stageState) }
             }
         }
     }
@@ -174,7 +178,9 @@ data class Track(
     val title: String,
     val fileName: String,
     val artist: String = "",
-    val composer: String = ""
+    val composer: String = "",
+    val sourceSize: Long? = null,
+    val sourceModified: Long? = null
 )
 
 data class FolderItem(
@@ -215,10 +221,12 @@ fun clearSavedTrackPreferences(context: Context) {
         .commit()
 }
 
-fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retriever: MediaMetadataRetriever): Track {
+fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retriever: MediaMetadataRetriever,
+    sourceSize: Long? = null, sourceModified: Long? = null): Track {
     var title: String? = null
     var artist = ""
     var composer = ""
+    var metadataRead = false
 
     try {
         retriever.setDataSource(context, uri)
@@ -231,6 +239,7 @@ fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retri
             else -> ""
         }
         composer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER)?.trim() ?: ""
+        metadataRead = true
     } catch (_: Exception) {}
 
     val cleanTitle = if (!title.isNullOrBlank()) title.trim() else fallbackName.substringBeforeLast(".")
@@ -240,7 +249,9 @@ fun extractTrackMetadata(context: Context, uri: Uri, fallbackName: String, retri
         title = cleanTitle,
         fileName = fallbackName,
         artist = artist,
-        composer = composer
+        composer = composer,
+        sourceSize = sourceSize.takeIf { metadataRead },
+        sourceModified = sourceModified.takeIf { metadataRead }
     )
 }
 
@@ -346,7 +357,7 @@ fun ColorSpectrumBar(
 
 @OptIn(UnstableApi::class)
 @Composable
-fun ShiroScreen(exoPlayer: MediaController) {
+fun ShiroScreen(exoPlayer: MediaController, stageState: ShiroStageState = remember { ShiroStageState() }) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -370,7 +381,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
     val inputFolders = remember { mutableStateListOf<FolderItem>() }
     var currentTrackIndex by remember { mutableIntStateOf(initialIndex) }
     val artwork = rememberTrackArtwork(tracks.getOrNull(currentTrackIndex)?.uri)
-    var stageRevealed by rememberSaveable { mutableStateOf(false) }
     val playerColorState = rememberPlayerColors(artwork)
     var isPlaying by remember { mutableStateOf(exoPlayer.isPlaying) }
     var showPause by remember { mutableStateOf(exoPlayer.wantsPlayback()) }
@@ -421,6 +431,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
     }
     var scanError by remember { mutableStateOf<String?>(null) }
     var cacheError by remember { mutableStateOf(false) }
+    val cacheSaveLock = remember { Mutex() }
+    var cacheSaveVersion by remember { mutableLongStateOf(0L) }
     var scanJob by remember { mutableStateOf<Job?>(null) }
     var scanGeneration by remember { mutableLongStateOf(0L) }
 
@@ -443,63 +455,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
         }
     }
 
-    var activeHitData by remember { mutableStateOf<TrackHitData?>(null) }
-    var clearingHitCache by remember { mutableStateOf(false) }
-    val analysisTracks = tracks.toList()
-    val analysisTrack = tracks.getOrNull(currentTrackIndex)
-
-    LaunchedEffect(lifecycleOwner, analysisTracks, showPause, currentScreen, clearingHitCache) {
-        // Background preparation yields to playback, including the buffering gap between songs.
-        if (showPause || currentScreen == Screen.CUSTOMIZE || clearingHitCache) return@LaunchedEffect
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            TrackAnalysisWorker.processPlaylistInBackground(context, analysisTracks)
-        }
-    }
-
-    LaunchedEffect(lifecycleOwner, analysisTrack, currentScreen, clearingHitCache) {
-        activeHitData = null
-        // The music stage uses live PCM. Only Customize consumes the old full-track beat map.
-        if (currentScreen != Screen.CUSTOMIZE || analysisTrack == null || clearingHitCache) return@LaunchedEffect
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            // Cancellation prevents stale publication. Only the replacement effect clears old data;
-            // a cancelled request's cleanup must not erase a newer request's result.
-            activeHitData = TrackAudioAnalyzer.analyzeTrack(context, analysisTrack.uri, analysisTrack.fileName)
-        }
-    }
-
-    LaunchedEffect(lifecycleOwner, isPlaying, activeHitData, currentTrackIndex, currentScreen) {
-        val hitData = activeHitData
-        if (isPlaying && hitData != null && currentScreen == Screen.CUSTOMIZE) {
-          lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            var lastPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-            val debounceMs = ((60000f / hitData.estimatedBpm) / 4f).toLong().coerceIn(50L, 250L)
-
-            var lastKickTime = -debounceMs
-            var kickIdx = hitData.kicksMs.indexOfFirst { it >= lastPos }.let { if (it == -1) hitData.kicksMs.size else it }
-
-            while (isActive && isPlaying) {
-                val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-
-                if (curPos < lastPos - 300L) {
-                    kickIdx = hitData.kicksMs.indexOfFirst { it >= curPos }.let { if (it == -1) hitData.kicksMs.size else it }
-                    lastKickTime = -debounceMs
-                }
-                lastPos = curPos
-
-                while (kickIdx < hitData.kicksMs.size && curPos >= hitData.kicksMs[kickIdx]) {
-                    val kickTime = hitData.kicksMs[kickIdx]
-                    if (kickTime - lastKickTime >= debounceMs) {
-                        lastKickTime = kickTime
-                        triggerSquish(SquishDirection.CENTER)
-                    }
-                    kickIdx++
-                }
-
-                delay(20L)
-            }
-          }
-        }
-    }
     val permissionToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
         android.Manifest.permission.READ_MEDIA_AUDIO
     } else {
@@ -507,7 +462,15 @@ fun ShiroScreen(exoPlayer: MediaController) {
     }
 
     fun persistPlaylist() {
-        cacheError = !savePlaylistCache(context, tracks.toList())
+        val snapshot = tracks.toList()
+        val version = ++cacheSaveVersion
+        scope.launch {
+            cacheSaveLock.withLock {
+                if (version != cacheSaveVersion) return@withLock
+                val saved = withContext(Dispatchers.IO) { savePlaylistCache(context, snapshot) }
+                if (version == cacheSaveVersion) cacheError = !saved
+            }
+        }
     }
 
     fun restoreTrackPosition(allScannedTracks: List<Track>) {
@@ -538,7 +501,12 @@ fun ShiroScreen(exoPlayer: MediaController) {
             } else {
                 // Refresh notification metadata without resetting the song or shuffle order.
                 allScannedTracks.forEachIndexed { itemIndex, track ->
-                    if (exoPlayer.getMediaItemAt(itemIndex).toTrack() != track) {
+                    val metadata = exoPlayer.getMediaItemAt(itemIndex).mediaMetadata
+                    // File fingerprints belong to the scan cache, not to playback metadata updates.
+                    if (metadata.title?.toString().orEmpty() != track.title ||
+                        metadata.artist?.toString().orEmpty() != track.artist ||
+                        metadata.composer?.toString().orEmpty() != track.composer ||
+                        metadata.extras?.getString("file_name").orEmpty() != track.fileName) {
                         exoPlayer.replaceMediaItem(itemIndex, track.toMediaItem())
                     }
                 }
@@ -576,14 +544,22 @@ fun ShiroScreen(exoPlayer: MediaController) {
             restoreTrackPosition(tracks)
             persistPlaylist()
         }
+        val trackSnapshot = tracks.toList()
         scanJob = scope.launch {
             var scanningFolder = ""
             val scannedTracks = try {
                 withContext(Dispatchers.IO) {
+                    val cachedByUri = loadPlaylistCache(context).associateBy { it.uri.toString() }.toMutableMap()
+                    for (track in trackSnapshot) {
+                        val key = track.uri.toString()
+                        if ((track.sourceSize != null && track.sourceModified != null) || key !in cachedByUri) {
+                            cachedByUri[key] = track
+                        }
+                    }
                     val result = mutableListOf<Track>()
                     for (folder in folders) {
                         scanningFolder = folder.name
-                        result.addAll(scanAudioFilesFromFolder(context, folder.uri))
+                        result.addAll(scanAudioFilesFromFolder(context, folder.uri, cachedByUri))
                     }
                     result.distinctBy { it.uri }
                 }
@@ -664,7 +640,10 @@ fun ShiroScreen(exoPlayer: MediaController) {
         }
     }
 
-    LaunchedEffect(lifecycleOwner, isPlaying) {
+    val characterVisible = currentScreen == Screen.CUSTOMIZE ||
+        (pagerState.currentPage == 0 && !isMenuOpen && !isInputsPopupOpen)
+    LaunchedEffect(lifecycleOwner, isPlaying, characterVisible) {
+        if (!characterVisible) return@LaunchedEffect
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (!isPlaying) {
                 try {
@@ -758,36 +737,20 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
 
     ShiroGlassTheme(playerColorState) {
-    if (currentScreen == Screen.CUSTOMIZE) {
-        CustomizeScreen(
-            onBack = { currentScreen = Screen.MAIN },
-            isHeterochromia = isHeterochromia,
-            onHeterochromiaChange = { isHeterochromia = it },
-            leftEyeColor = leftEyeColor,
-            onLeftEyeColorChange = { leftEyeColor = it },
-            rightEyeColor = rightEyeColor,
-            onRightEyeColorChange = { rightEyeColor = it },
-            isBlinking = isBlinking,
-            isSleepy = isSleepy,
-            squishProgress = squishProgress.value,
-            squishDirection = squishDirection,
-            isAutoSwaying = isAutoSwaying,
-            swaySkew = 0f,
-            onCharacterTap = {
-                triggerSquish(SquishDirection.CENTER)
-            }
-        )
-    } else {
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().then(
+            if (currentScreen == Screen.CUSTOMIZE) Modifier.clearAndSetSemantics {} else Modifier
+        )) {
             HorizontalPager(
                 state = pagerState,
+                beyondViewportPageCount = 1,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 if (page == 0) {
                   val playerColors = LocalPlayerColors.current
-                  val backdropFrame = remember { mutableStateOf(MusicBackdropFrame()) }
-                  BoxWithConstraints(Modifier.fillMaxSize()) {
-                    MusicBackdrop(playerColors, visualizerMode, visualizerLayout, backdropFrame, Modifier.matchParentSize())
+                  BoxWithConstraints(Modifier.fillMaxSize().background(
+                      Brush.verticalGradient(listOf(playerColors.selected, playerColors.backdrop))
+                  )) {
                     // Short/landscape windows scroll instead of collapsing the cat to zero height.
                     val extraTextHeight = 160.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
                     val pageHeight = maxOf(maxHeight, 780.dp + extraTextHeight)
@@ -813,7 +776,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
-
+                        StageGradient(playerColors, visualizerMode, visualizerLayout, stageState.backdrop,
+                            Modifier.matchParentSize())
                         Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
                         Row(
                             modifier = Modifier
@@ -843,11 +807,11 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             contentAlignment = Alignment.Center
                         ) {
                             ConnectedShiroStage(
+                                stageState = stageState,
                                 controller = exoPlayer,
                                 trackKey = tracks.getOrNull(currentTrackIndex)?.uri?.toString(),
                                 visualizerMode = visualizerMode,
                                 visualizerLayout = visualizerLayout,
-                                onBackdropFrame = { backdropFrame.value = it },
                                 visible = currentScreen == Screen.MAIN && pagerState.currentPage == 0 &&
                                     !isMenuOpen && !isInputsPopupOpen,
                                 isPlaying = isPlaying,
@@ -856,8 +820,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                                 leftEyeColor = leftEyeColor,
                                 rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
                                 artwork = artwork,
-                                revealOnEntry = !stageRevealed,
-                                onRevealStarted = { stageRevealed = true },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -1196,35 +1158,6 @@ fun ShiroScreen(exoPlayer: MediaController) {
                             )
                         }
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                        GlassSurface(
-                            shape = RoundedCornerShape(18.dp),
-                            elevation = 2.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .glassClickable(enabled = !clearingHitCache) {
-                                    isMenuOpen = false
-                                    clearingHitCache = true
-                                    activeHitData = null
-                                    scope.launch {
-                                        try {
-                                            TrackAudioAnalyzer.clearAllCache(context)
-                                            Toast.makeText(context, "Map cache deleted. Rebuilds while paused or in Customize.", Toast.LENGTH_SHORT).show()
-                                        } finally {
-                                            clearingHitCache = false
-                                        }
-                                    }
-                                }
-                        ) {
-                            Text(
-                                text = "Delete Map Cache",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
                     }
                 }
             }
@@ -1336,6 +1269,30 @@ fun ShiroScreen(exoPlayer: MediaController) {
                 )
             }
         }
+    if (currentScreen == Screen.CUSTOMIZE) {
+        // The retained page underneath must not receive taps through empty areas of Customize.
+        Box(Modifier.matchParentSize().pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+            }
+        })
+        CustomizeScreen(
+            onBack = { currentScreen = Screen.MAIN },
+            isHeterochromia = isHeterochromia,
+            onHeterochromiaChange = { isHeterochromia = it },
+            leftEyeColor = leftEyeColor,
+            onLeftEyeColorChange = { leftEyeColor = it },
+            rightEyeColor = rightEyeColor,
+            onRightEyeColorChange = { rightEyeColor = it },
+            isBlinking = isBlinking,
+            isSleepy = isSleepy,
+            squishProgress = squishProgress.value,
+            squishDirection = squishDirection,
+            isAutoSwaying = isAutoSwaying,
+            swaySkew = 0f,
+            onCharacterTap = { triggerSquish(SquishDirection.CENTER) }
+        )
+    }
     }
     if (cacheError) {
         GlassAlertDialog(
@@ -1545,8 +1502,6 @@ fun PlaylistScreen(
     onTrackSelected: (Int) -> Unit,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
-    val cacheRevision by TrackAudioAnalyzer.cacheRevision.collectAsState()
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -1708,7 +1663,7 @@ fun PlaylistScreen(
             GlassFilterChip(selected = favoritesOnly, onClick = { favoritesOnly = true },
                 colors = chipColors, shape = RoundedCornerShape(16.dp), label = { Text("Favorites") })
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
+        Spacer(Modifier.height(8.dp))
 
         Box(modifier = Modifier.weight(1f)) {
             if (tracks.isEmpty()) {
@@ -1828,21 +1783,23 @@ fun PlaylistScreen(
                                         Text("Unavailable · tap to retry", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                                     }
                                 }
-                                FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
-                                    onToggleFavorite(track)
+                                if (favoritesOnly) {
+                                    GlassIconButton(
+                                        onClick = { onToggleFavorite(track) },
+                                        modifier = Modifier.glassPanel(LocalPlayerColors.current, CircleShape, selected = true)
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_close),
+                                            contentDescription = "Remove ${track.title} from favorites",
+                                            tint = LocalPlayerColors.current.accent
+                                        )
+                                    }
+                                } else {
+                                    FavoriteButton(track.uri.toString() in favoriteIds, track.title) {
+                                        onToggleFavorite(track)
+                                    }
                                 }
 
-                                val isCached by produceState(false, track.fileName, cacheRevision) {
-                                    value = TrackAudioAnalyzer.hasCache(context, track.fileName)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(
-                                            color = if (isCached) Color(0xFF22C55E) else MaterialTheme.colorScheme.error,
-                                            shape = CircleShape
-                                        )
-                                )
                             }
                         }
 

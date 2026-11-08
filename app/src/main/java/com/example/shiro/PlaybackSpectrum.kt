@@ -7,8 +7,10 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.log10
 
 /** Immutable snapshots: consumers must not modify [bands]. Levels are normalized to 0..1. */
-data class SpectrumFrame(val bands: FloatArray, val bassEnergy: Float, val dynamics: MusicDynamics = MusicDynamics()) {
+data class SpectrumFrame(val bands: FloatArray, val bassEnergy: Float, val dynamics: MusicDynamics = MusicDynamics(),
+    val available: Boolean = true) {
     internal fun attenuated(gain: Float): SpectrumFrame {
+        if (!available) return this
         val volume = if (gain.isFinite()) gain.coerceIn(0f, 1f) else 0f
         if (volume == 1f) return this
         if (volume == 0f) return silence()
@@ -20,12 +22,13 @@ data class SpectrumFrame(val bands: FloatArray, val bassEnergy: Float, val dynam
     companion object {
         const val BAND_COUNT = 24
         fun silence() = SpectrumFrame(FloatArray(BAND_COUNT), 0f)
+        fun unavailable() = SpectrumFrame(FloatArray(BAND_COUNT), 0f, available = false)
     }
 }
 
 /** In-process bridge between the playback service and the visible music scene. */
 object PlaybackSpectrum {
-    private val mutableFrames = MutableStateFlow(SpectrumFrame.silence())
+    private val mutableFrames = MutableStateFlow(SpectrumFrame.unavailable())
     val frames: StateFlow<SpectrumFrame> = mutableFrames.asStateFlow()
 
     @Volatile internal var visible = false
@@ -42,7 +45,7 @@ object PlaybackSpectrum {
 
     internal fun clear() {
         generation.incrementAndGet()
-        mutableFrames.value = SpectrumFrame.silence()
+        mutableFrames.value = SpectrumFrame.unavailable()
     }
 
     internal fun publish(frame: SpectrumFrame) {

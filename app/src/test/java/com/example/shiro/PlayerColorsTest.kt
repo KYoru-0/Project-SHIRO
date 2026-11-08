@@ -20,18 +20,17 @@ class PlayerColorsTest {
     @Test fun artworkShadesPreserveContrastAcrossTheirBlends() {
         for (cover in listOf(0xFFE9D966, 0xFFFF0000, 0xFF0000FF, 0xFF00FF00, 0xFFAAAAAA, 0xFFFFFFFF, 0xFF000000)) {
             val colors = playerColors(Color(artworkPalette(intArrayOf(cover.toInt()))[1]))
-            val lights = backdropLights(colors)
-            val stops = listOf(colors.selected, colors.backdrop, lights.light, lights.shade, lights.pearl)
+            val stops = listOf(colors.selected, colors.backdrop, colors.surface)
             for (from in stops) for (to in stops) for (step in 0..10) {
                 val surface = lerp(from, to, step / 10f)
                 for (ink in listOf(colors.text, colors.secondaryText, colors.accent)) {
-                    assertTrue("Lighting blend contrast for $cover", (surface.luminance() + 0.05f) / (ink.luminance() + 0.05f) >= 4.5f)
+                    assertTrue("Background blend contrast for $cover", (surface.luminance() + 0.05f) / (ink.luminance() + 0.05f) >= 4.5f)
                 }
             }
             if (cover == 0xFFE9D966) for (stop in stops) {
-                assertTrue("Yellow artwork must not acquire red/teal background light", stop.red >= stop.blue && stop.green >= stop.blue)
+                assertTrue("Yellow artwork must not acquire a red/teal background", stop.red >= stop.blue && stop.green >= stop.blue)
             }
-            if (cover == 0xFFAAAAAA) assertTrue(kotlin.math.abs(lights.light.red - lights.light.blue) < 0.001f)
+            if (cover == 0xFFAAAAAA) assertTrue(kotlin.math.abs(colors.selected.red - colors.selected.blue) < 0.001f)
         }
     }
 

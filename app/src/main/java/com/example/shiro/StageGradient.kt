@@ -27,12 +27,12 @@ import kotlin.math.sin
 
 /** Use only the extracted cover color and its light/dark shades, with no added hue shifts. */
 internal fun stageGradientColors(colors: PlayerColors): List<Color> = listOf(
-    colors.artworkSeed, lerp(colors.artworkSeed, Color.White, 0.65f),
-    lerp(colors.artworkSeed, Color.Black, 0.22f))
+    colors.artworkSeed, lerp(colors.artworkSeed, Color.White, 0.35f),
+    lerp(colors.artworkSeed, Color.Black, 0.12f))
 
 /** No decorative overlay while paused/silent; the music envelope eases its opacity to zero. */
 internal fun stageGradientOpacity(frame: MusicBackdropFrame): Float =
-    (frame.energy * 0.68f + frame.pulse * 0.12f).coerceIn(0f, 0.8f)
+    (frame.energy * 0.21f + frame.pulse * 0.03f).coerceIn(0f, 0.24f)
 
 /** A fixed, small mesh bends the gradient itself, including its transparent edges. */
 internal class GradientSheet {
@@ -41,8 +41,8 @@ internal class GradientSheet {
     fun update(frame: MusicBackdropFrame, layer: Int, liquid: Float, circle: Boolean,
         aspect: Float = 1f, centerY: Float = 0.5f) {
         val phase = frame.phase * (3.0 + layer * 0.35) + layer * 1.8
-        val bend = frame.energy * (0.09f + liquid * 0.12f) + frame.pulse * 0.08f
-        val half = 0.115f + liquid * 0.025f + frame.bass * 0.015f
+        val bend = frame.energy * (0.04f + liquid * 0.045f) + frame.pulse * 0.015f
+        val half = 0.15f + liquid * 0.025f + frame.bass * 0.015f
         fun band(position: Float): Float {
             val levels = frame.spectrum ?: return 0f
             if (levels.isEmpty()) return 0f
@@ -67,15 +67,15 @@ internal class GradientSheet {
             if (circle) {
                 val angle = -PI / 2.0 - frame.rotation - u * PI * 2.0
                 val nx = cos(angle).toFloat(); val ny = sin(angle).toFloat() * aspect
-                val radius = (0.19f + layer * 0.17f + driven * 0.20f + frame.bass * 0.055f +
+                val radius = (0.19f + layer * 0.17f + driven * 0.10f + frame.bass * 0.025f +
                     wave * bend * (0.16f + liquid * 0.32f)).coerceAtLeast(half + 0.025f)
                 vertices[top] = 0.5f + nx * (radius - half)
                 vertices[top + 1] = centerY + ny * (radius - half)
                 vertices[bottom] = 0.5f + nx * (radius + half)
                 vertices[bottom + 1] = centerY + ny * (radius + half)
             } else {
-                val y = 0.40f + layer * 0.23f - driven * (0.36f - liquid * 0.10f) -
-                    frame.bass * 0.08f + wave * bend * (0.3f + liquid * 0.7f)
+                val y = 0.40f + layer * 0.23f - driven * (0.18f - liquid * 0.05f) -
+                    frame.bass * 0.04f + wave * bend * (0.3f + liquid * 0.7f)
                 vertices[top] = x; vertices[top + 1] = y - half
                 vertices[bottom] = x; vertices[bottom + 1] = y + half
             }
