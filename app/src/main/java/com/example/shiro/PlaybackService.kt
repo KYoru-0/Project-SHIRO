@@ -31,32 +31,20 @@ import com.google.common.util.concurrent.ListenableFuture
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
     companion object {
-        const val ACTION_FAVORITE = "com.example.shiro.ACTION_FAVORITE"
         const val ACTION_CLOSE = "com.example.shiro.ACTION_CLOSE"
     }
 
-    private val favoriteCommand = SessionCommand(ACTION_FAVORITE, Bundle.EMPTY)
     private val closeCommand = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
 
     private fun updateCustomLayout() {
-        val favoriteIds = loadFavoriteIds(this)
-        val currentUri = player.currentMediaItem?.mediaId.orEmpty()
-        val isFavorite = currentUri.isNotBlank() && currentUri in favoriteIds
-
-        val favoriteButton = CommandButton.Builder()
-            .setDisplayName(if (isFavorite) "Remove from favorites" else "Add to favorites")
-            .setIconResId(if (isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline)
-            .setSessionCommand(favoriteCommand)
-            .build()
-
         val closeButton = CommandButton.Builder()
             .setDisplayName("Exit Shiro")
             .setIconResId(R.drawable.ic_close)
             .setSessionCommand(closeCommand)
             .build()
 
-        session?.setCustomLayout(listOf(favoriteButton, closeButton))
-        session?.setMediaButtonPreferences(listOf(favoriteButton, closeButton))
+        session?.setCustomLayout(listOf(closeButton))
+        session?.setMediaButtonPreferences(listOf(closeButton))
     }
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
@@ -149,19 +137,8 @@ class PlaybackService : MediaSessionService() {
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
                     val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                        .add(favoriteCommand)
                         .add(closeCommand)
                     if (controller.packageName == packageName) commands.add(SleepTimer.command)
-
-                    val favoriteIds = loadFavoriteIds(this@PlaybackService)
-                    val currentUri = player.currentMediaItem?.mediaId.orEmpty()
-                    val isFavorite = currentUri.isNotBlank() && currentUri in favoriteIds
-
-                    val favoriteButton = CommandButton.Builder()
-                        .setDisplayName(if (isFavorite) "Remove from favorites" else "Add to favorites")
-                        .setIconResId(if (isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart_outline)
-                        .setSessionCommand(favoriteCommand)
-                        .build()
 
                     val closeButton = CommandButton.Builder()
                         .setDisplayName("Exit Shiro")
@@ -171,8 +148,8 @@ class PlaybackService : MediaSessionService() {
 
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(commands.build())
-                        .setCustomLayout(listOf(favoriteButton, closeButton))
-                        .setMediaButtonPreferences(listOf(favoriteButton, closeButton))
+                        .setCustomLayout(listOf(closeButton))
+                        .setMediaButtonPreferences(listOf(closeButton))
                         .build()
                 }
 
@@ -182,21 +159,6 @@ class PlaybackService : MediaSessionService() {
                     customCommand: SessionCommand,
                     args: Bundle
                 ): ListenableFuture<SessionResult> {
-                    if (customCommand.customAction == ACTION_FAVORITE) {
-                        val currentUri = player.currentMediaItem?.mediaId.orEmpty()
-                        if (currentUri.isNotBlank()) {
-                            val favoriteIds = loadFavoriteIds(this@PlaybackService).toMutableSet()
-                            if (currentUri in favoriteIds) {
-                                favoriteIds.remove(currentUri)
-                            } else {
-                                favoriteIds.add(currentUri)
-                            }
-                            saveFavoriteIds(this@PlaybackService, favoriteIds)
-                            updateCustomLayout()
-                            publishSleepState()
-                        }
-                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                    }
                     if (customCommand.customAction == ACTION_CLOSE) {
                         persistPlayback()
                         player.pause()
