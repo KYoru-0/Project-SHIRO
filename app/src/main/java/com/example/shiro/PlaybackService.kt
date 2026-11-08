@@ -56,6 +56,7 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         session?.setCustomLayout(listOf(favoriteButton, closeButton))
+        session?.setMediaButtonPreferences(listOf(favoriteButton, closeButton))
     }
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
@@ -171,6 +172,7 @@ class PlaybackService : MediaSessionService() {
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(commands.build())
                         .setCustomLayout(listOf(favoriteButton, closeButton))
+                        .setMediaButtonPreferences(listOf(favoriteButton, closeButton))
                         .build()
                 }
 
@@ -198,6 +200,8 @@ class PlaybackService : MediaSessionService() {
                     if (customCommand.customAction == ACTION_CLOSE) {
                         persistPlayback()
                         player.pause()
+                        player.clearMediaItems()
+                        sendBroadcast(Intent("com.example.shiro.EXIT_APP").setPackage(packageName))
                         stopSelf()
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
@@ -227,6 +231,12 @@ class PlaybackService : MediaSessionService() {
 
         // Restore once in the service. Reopening or rotating the UI never resets live playback.
         val prefs = getSharedPreferences("shiro_prefs", MODE_PRIVATE)
+        val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "favorite_track_uris") {
+                updateCustomLayout()
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         val tracks = loadPlaylistCache(this)
         player.shuffleModeEnabled = prefs.getBoolean("is_shuffle_on", false)
         player.repeatMode = if (prefs.getBoolean("is_repeat_one_on", false)) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL

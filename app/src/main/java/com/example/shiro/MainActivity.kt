@@ -1,7 +1,11 @@
 package com.example.shiro
 
+import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
@@ -130,7 +134,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -417,6 +420,33 @@ fun ShiroScreen(exoPlayer: MediaController) {
     var isMenuOpen by remember { mutableStateOf(false) }
     var isInputsPopupOpen by remember { mutableStateOf(false) }
     var favoriteIds by remember { mutableStateOf(loadFavoriteIds(context)) }
+
+    DisposableEffect(context) {
+        val prefs = context.getSharedPreferences("shiro_prefs", Context.MODE_PRIVATE)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "favorite_track_uris") {
+                favoriteIds = loadFavoriteIds(context)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == "com.example.shiro.EXIT_APP") {
+                    (context as? Activity)?.finishAndRemoveTask()
+                }
+            }
+        }
+        val filter = IntentFilter("com.example.shiro.EXIT_APP")
+        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        onDispose {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {}
+        }
+    }
     var unavailableIds by remember(exoPlayer) {
         mutableStateOf(exoPlayer.sessionExtras.getStringArrayList(PlaybackRecovery.UNAVAILABLE_IDS).orEmpty().toSet())
     }
@@ -1390,8 +1420,8 @@ fun ShiroScreen(exoPlayer: MediaController) {
                     }
                 },
                 dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
-        )
-    }
+            )
+        }
 }
 
 @Composable
