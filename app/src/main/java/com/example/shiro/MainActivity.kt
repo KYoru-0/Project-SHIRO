@@ -718,163 +718,172 @@ fun ShiroScreen(exoPlayer: MediaController) {
 
 
 
-    if (currentScreen == Screen.CUSTOMIZE) {
-        CustomizeScreen(
-            onBack = { currentScreen = Screen.MAIN },
-            isHeterochromia = isHeterochromia,
-            onHeterochromiaChange = { isHeterochromia = it },
-            leftEyeColor = leftEyeColor,
-            onLeftEyeColorChange = { leftEyeColor = it },
-            rightEyeColor = rightEyeColor,
-            onRightEyeColorChange = { rightEyeColor = it },
-            isBlinking = isBlinking,
-            isSleepy = isSleepy,
-            squishProgress = 0f,
-            squishDirection = squishDirection,
-            isAutoSwaying = isAutoSwaying,
-            swaySkew = 0f,
-            onCharacterTap = {}
-        )
-    } else {
-        Box(modifier = Modifier.fillMaxSize()) {
-            HorizontalPager(
-                state = pagerState,
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .statusBarsPadding()
+                .padding(top = 56.dp, bottom = 220.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            ConnectedShiroStage(
+                controller = exoPlayer,
+                visible = true,
+                isPlaying = isPlaying,
+                isBlinking = isBlinking,
+                isSleepy = isSleepy,
+                leftEyeColor = leftEyeColor,
+                rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
+                artwork = artwork,
+                shiroCount = shiroCount,
                 modifier = Modifier.fillMaxSize()
-            ) { page ->
-                if (page == 0) {
-                  Box(Modifier.fillMaxSize()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Brush.verticalGradient(listOf(
-                                Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
-                            )))
-                            .navigationBarsPadding()
-                            .padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color.White)
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .statusBarsPadding(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) { isMenuOpen = true },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_menu),
-                                    contentDescription = "Menu",
-                                    tint = Color(0xFF0369A1),
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-                            Spacer(Modifier.weight(1f))
+            )
+        }
 
-                            // Shiro amount controller: - |(shiro icon) ##| +
+        if (currentScreen == Screen.CUSTOMIZE) {
+            CustomizeScreen(
+                onBack = { currentScreen = Screen.MAIN },
+                isHeterochromia = isHeterochromia,
+                onHeterochromiaChange = { isHeterochromia = it },
+                leftEyeColor = leftEyeColor,
+                onLeftEyeColorChange = { leftEyeColor = it },
+                rightEyeColor = rightEyeColor,
+                onRightEyeColorChange = { rightEyeColor = it },
+                isBlinking = isBlinking,
+                isSleepy = isSleepy,
+                squishProgress = 0f,
+                squishDirection = squishDirection,
+                isAutoSwaying = isAutoSwaying,
+                swaySkew = 0f,
+                onCharacterTap = {}
+            )
+        } else {
+            Box(modifier = Modifier.fillMaxSize()) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    if (page == 0) {
+                      Box(Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Brush.verticalGradient(listOf(
+                                    Color(0xFFF5FAFF), LightBlue, Color(0xFFD6EAF6)
+                                )))
+                                .navigationBarsPadding()
+                                .padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.White)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .statusBarsPadding(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Minus button (unfilled, drawn icon)
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .clickable {
-                                            if (shiroCount > 1) shiroCount--
-                                        },
+                                        .size(48.dp)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { isMenuOpen = true },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Canvas(modifier = Modifier.size(14.dp)) {
-                                        drawLine(
-                                            color = Color(0xFF0369A1),
-                                            start = Offset(0f, size.height / 2f),
-                                            end = Offset(size.width, size.height / 2f),
-                                            strokeWidth = 4f,
-                                            cap = StrokeCap.Round
-                                        )
-                                    }
-                                }
-
-                                // Container: |(shiro icon) ##|
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier
-                                        .background(Color(0xFFF0F6FC), RoundedCornerShape(16.dp))
-                                        .border(1.dp, Color(0xFFBAE6FD), RoundedCornerShape(16.dp))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ic_shiro_foreground),
-                                        contentDescription = "Shiro icon",
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_menu),
+                                        contentDescription = "Menu",
+                                        tint = Color(0xFF0369A1),
                                         modifier = Modifier.size(28.dp)
                                     )
-                                    Text(
-                                        text = "$shiroCount",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF0369A1)
-                                    )
                                 }
+                                Spacer(Modifier.weight(1f))
 
-                                // Plus button (unfilled, drawn icon)
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clickable {
-                                            if (shiroCount < 20) shiroCount++
-                                        },
-                                    contentAlignment = Alignment.Center
+                                // Shiro amount controller: - |(shiro icon) ##| +
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Canvas(modifier = Modifier.size(14.dp)) {
-                                        drawLine(
-                                            color = Color(0xFF0369A1),
-                                            start = Offset(0f, size.height / 2f),
-                                            end = Offset(size.width, size.height / 2f),
-                                            strokeWidth = 4f,
-                                            cap = StrokeCap.Round
+                                    // Minus button (unfilled, drawn icon)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clickable {
+                                                if (shiroCount > 1) shiroCount--
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Canvas(modifier = Modifier.size(14.dp)) {
+                                            drawLine(
+                                                color = Color(0xFF0369A1),
+                                                start = Offset(0f, size.height / 2f),
+                                                end = Offset(size.width, size.height / 2f),
+                                                strokeWidth = 4f,
+                                                cap = StrokeCap.Round
+                                            )
+                                        }
+                                    }
+
+                                    // Container: |(shiro icon) ##|
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier
+                                            .background(Color(0xFFF0F6FC), RoundedCornerShape(16.dp))
+                                            .border(1.dp, Color(0xFFBAE6FD), RoundedCornerShape(16.dp))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Image(
+                                            painter = painterResource(id = R.drawable.ic_shiro_foreground),
+                                            contentDescription = "Shiro icon",
+                                            modifier = Modifier.size(28.dp)
                                         )
-                                        drawLine(
-                                            color = Color(0xFF0369A1),
-                                            start = Offset(size.width / 2f, 0f),
-                                            end = Offset(size.width / 2f, size.height),
-                                            strokeWidth = 4f,
-                                            cap = StrokeCap.Round
+                                        Text(
+                                            text = "$shiroCount",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF0369A1)
                                         )
+                                    }
+
+                                    // Plus button (unfilled, drawn icon)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clickable {
+                                                if (shiroCount < 20) shiroCount++
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Canvas(modifier = Modifier.size(14.dp)) {
+                                            drawLine(
+                                                color = Color(0xFF0369A1),
+                                                start = Offset(0f, size.height / 2f),
+                                                end = Offset(size.width, size.height / 2f),
+                                                strokeWidth = 4f,
+                                                cap = StrokeCap.Round
+                                            )
+                                            drawLine(
+                                                color = Color(0xFF0369A1),
+                                                start = Offset(size.width / 2f, 0f),
+                                                end = Offset(size.width / 2f, size.height),
+                                                strokeWidth = 4f,
+                                                cap = StrokeCap.Round
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            ConnectedShiroStage(
-                                controller = exoPlayer,
-                                visible = currentScreen == Screen.MAIN,
-                                isPlaying = isPlaying,
-                                isBlinking = isBlinking,
-                                isSleepy = isSleepy,
-                                leftEyeColor = leftEyeColor,
-                                rightEyeColor = if (isHeterochromia) rightEyeColor else leftEyeColor,
-                                artwork = artwork,
-                                shiroCount = shiroCount,
-                                modifier = Modifier.fillMaxSize()
+                            Spacer(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
                             )
-                        }
 
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -1388,6 +1397,7 @@ fun ShiroScreen(exoPlayer: MediaController) {
             },
             dismissButton = { TextButton(onClick = { scanError = null }) { Text("Close") } }
         )
+    }
     }
 }
 
